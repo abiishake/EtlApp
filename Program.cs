@@ -93,7 +93,14 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
     if (rows.Count == 0)
         return Results.BadRequest(new { error = "No rows match the filters." });
 
-    var bytes = ExcelIo.Write(data with { Rows = rows }, columns);
+    // optional header renames (export only; data lookup still uses the original column names)
+    var headers = columns.Select(c =>
+        body.Renames != null && body.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
+    var dup = headers.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+    if (dup != null)
+        return Results.BadRequest(new { error = $"Duplicate column name \"{dup.Key}\" after renaming. Please use unique names." });
+
+    var bytes = ExcelIo.Write(data with { Rows = rows }, columns, headers);
     return Results.File(
         bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -103,4 +110,4 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
 app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames);

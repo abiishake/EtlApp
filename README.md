@@ -1,6 +1,6 @@
 # Research Form ETL
 
-Upload the research-form .xlsx -> ETL runs -> pick columns -> download transformed .xlsx.
+Upload the research-form .xlsx -> ETL runs -> pick columns (optionally rename them) -> download transformed .xlsx.
 
 ## Run
 Only Docker + Docker Compose are needed on the server (no .NET install).

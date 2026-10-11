@@ -55,7 +55,9 @@
   .col:last-child { border-bottom:0; }
   .col:hover { background:rgba(127,127,127,.08); }
   .col input { width:16px; height:16px; flex:none; }
-  .col span { overflow-wrap:anywhere; }
+  .col span { overflow-wrap:anywhere; flex:1; }
+  .col .rn { flex:0 1 240px; width:240px; }
+  .tgl { display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--muted); font-size:13px; }
   .tag { margin-left:auto; flex:none; font-size:11px; font-style:normal; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:0 8px; }
   .dl { margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 </style>
@@ -93,6 +95,7 @@
       <input id="search" type="search" placeholder="Filter columns…">
       <button id="allBtn">Select all</button>
       <button id="noneBtn">Select none</button>
+      <label class="tgl"><input type="checkbox" id="renameToggle"> Rename columns</label>
       <span id="count" class="count"></span>
     </div>
     <div id="cols"></div>
@@ -118,6 +121,7 @@
   let byName = {};
   let columns = [];          // final columns, in order
   const selected = new Set();
+  let renames = {};          // original column name -> new header (export only)
   let filters = [];          // [{column, op, value}]
   let matchCount = null, totalRows = 0, filterError = "";
 
@@ -149,6 +153,8 @@
       byName = Object.fromEntries(info.map(c => [c.name, c]));
       columns = data.columns;
       selected.clear();
+      renames = {};
+      $("renameToggle").checked = false;
       columns.forEach(c => selected.add(c));          // everything selected by default
       filters = [];
       matchCount = totalRows = data.rowCount;
@@ -290,6 +296,14 @@
 
       label.append(cb, el("span", null, c));
       if (CALCULATED.has(c)) label.append(el("em", "tag", "calculated"));
+      if ($("renameToggle").checked) {
+        const rn = document.createElement("input");
+        rn.type = "text"; rn.className = "rn"; rn.placeholder = "Rename to…";
+        rn.value = renames[c] || "";
+        rn.onclick = e => e.stopPropagation();
+        rn.oninput = () => { const v = rn.value.trim(); if (v) renames[c] = v; else delete renames[c]; };
+        label.append(rn);
+      }
       box.append(label);
     });
     refresh();
@@ -309,6 +323,7 @@
   }
 
   $("search").oninput = renderColumns;
+  $("renameToggle").onchange = renderColumns;
   $("allBtn").onclick  = () => { columns.forEach(c => selected.add(c)); renderColumns(); };
   $("noneBtn").onclick = () => { selected.clear(); renderColumns(); };
 
@@ -323,7 +338,8 @@
         body: JSON.stringify({
           id: sessionId,
           columns: columns.filter(c => selected.has(c)),
-          filters: activeFilters()
+          filters: activeFilters(),
+          renames: Object.fromEntries(Object.entries(renames).filter(([c]) => selected.has(c)))
         })
       });
       if (!res.ok) throw new Error((await res.json()).error || "Export failed");
