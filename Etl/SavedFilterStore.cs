@@ -16,6 +16,8 @@ public sealed record SavedFilter(
 /// saving under an existing name replaces the earlier entry.
 /// Connections are not pooled, so the .db file is closed between calls and safe to copy for backups.
 /// </summary>
+public sealed record SavedWorkflow(long Id, string Name, string Json, DateTime SavedAt);
+
 public sealed class SavedFilterStore
 {
     readonly string _dir;
@@ -88,7 +90,51 @@ public sealed class SavedFilterStore
             alter.CommandText = $"ALTER TABLE saved_filters ADD COLUMN {extra} TEXT NULL";
             alter.ExecuteNonQuery();
         }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = @"CREATE TABLE IF NOT EXISTS saved_workflows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                workflow_json TEXT NOT NULL,
+                saved_at TEXT NOT NULL)";
+            cmd.ExecuteNonQuery();
+        }
         return conn;
+    }
+
+    public void SaveWorkflow(string name, string json)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO saved_workflows(name, workflow_json, saved_at) VALUES($n,$j,$t)
+            ON CONFLICT(name) DO UPDATE SET workflow_json=excluded.workflow_json, saved_at=excluded.saved_at";
+        cmd.Parameters.AddWithValue("$n", name);
+        cmd.Parameters.AddWithValue("$j", json);
+        cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+        cmd.ExecuteNonQuery();
+    }
+
+    public List<SavedWorkflow> ListWorkflows()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id,name,workflow_json,saved_at FROM saved_workflows ORDER BY saved_at DESC";
+        using var r = cmd.ExecuteReader();
+        var list = new List<SavedWorkflow>();
+        while (r.Read()) list.Add(new SavedWorkflow(r.GetInt64(0), r.GetString(1), r.GetString(2),
+            DateTime.Parse(r.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
+        return list;
+    }
+
+    public SavedWorkflow? GetWorkflow(long id)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id,name,workflow_json,saved_at FROM saved_workflows WHERE id=$id";
+        cmd.Parameters.AddWithValue("$id", id);
+        using var r = cmd.ExecuteReader();
+        return r.Read() ? new SavedWorkflow(r.GetInt64(0), r.GetString(1), r.GetString(2),
+            DateTime.Parse(r.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)) : null;
     }
 
     public void Save(string name, string fileName, string mode, List<FilterSpec> filters,

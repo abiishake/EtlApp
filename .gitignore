@@ -4,3 +4,4 @@ bin/Debug/net8.0/DocumentFormat.OpenXml.dll
 /obj
 /Properties
 data/etl.db
+EtlApp.slnx

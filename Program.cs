@@ -129,6 +129,67 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
         fileName);
 });
 
+// Multi-sheet export: each sheet has independent filters, columns, renames, and output name.
+app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store, SavedFilterStore saved, HttpContext http, ILogger<Program> log) =>
+{
+    var data = store.Get(body.Id ?? "");
+    if (data == null) return Results.NotFound(new { error = "Session expired. Please upload the file again." });
+    if (body.Sheets == null || body.Sheets.Count == 0) return Results.BadRequest(new { error = "Add at least one output sheet." });
+    try
+    {
+        var requestedFilterNames = body.Sheets
+            .Where(sheet => sheet.SaveFilters == true && Filtering.Active(sheet.Filters).Count > 0)
+            .Select(sheet => sheet.FilterName?.Trim() ?? "")
+            .ToList();
+        if (requestedFilterNames.Any(string.IsNullOrWhiteSpace))
+            return Results.BadRequest(new { error = "Enter a filter name for every sheet where Remember these filters is selected." });
+        var duplicateFilterName = requestedFilterNames
+            .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateFilterName != null)
+            return Results.BadRequest(new { error = $"The filter name '{duplicateFilterName.Key}' is used by more than one sheet. Give each saved filter a unique name." });
+
+        var exports = new List<ExcelIo.SheetExport>();
+        foreach (var sheet in body.Sheets)
+        {
+            var chosen = new HashSet<string>(sheet.Columns ?? new List<string>());
+            var cols = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();
+            if (cols.Count == 0) throw new ArgumentException($"Sheet '{sheet.SheetName}' has no selected columns.");
+            var rows = Filtering.Apply(data, sheet.Filters, sheet.Mode);
+            if (rows.Count == 0) throw new ArgumentException($"No rows match the filters for sheet '{sheet.SheetName}'.");
+            var headers = cols.Select(c => sheet.Renames != null && sheet.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
+            var dup = headers.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+            if (dup != null) throw new ArgumentException($"Sheet '{sheet.SheetName}' has duplicate column name '{dup.Key}' after renaming.");
+            exports.Add(new ExcelIo.SheetExport(sheet.SheetName ?? "", data with { Rows = rows }, cols, headers));
+            if (sheet.SaveFilters == true)
+            {
+                var active = Filtering.Active(sheet.Filters);
+                if (active.Count > 0)
+                {
+                    // Save using the exact filter name entered for this sheet; do not append the sheet name.
+                    var filterName = sheet.FilterName?.Trim();
+                    if (string.IsNullOrWhiteSpace(filterName))
+                        throw new ArgumentException($"Enter a filter name for sheet '{sheet.SheetName}'.");
+                    if (filterName.Length > 100)
+                        throw new ArgumentException($"Filter name for sheet '{sheet.SheetName}' must be 100 characters or fewer.");
+                    var sheetName = (sheet.SheetName ?? "Sheet").Trim();
+                    var keptRenames = new Dictionary<string, string>();
+                    for (var i = 0; i < cols.Count; i++)
+                        if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
+                    try { saved.Save(filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames); }
+                    catch (Exception ex) { log.LogWarning(ex, "Could not save filters for sheet {SheetName}", sheet.SheetName); }
+                }
+            }
+        }
+        var bytes = ExcelIo.WriteMultiple(exports);
+        var baseName = SanitizeFileName(body.FileName);
+        var fileName = baseName != null ? $"{baseName}.xlsx" : $"Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+        return Results.File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (Exception ex) { log.LogError(ex, "Multi-sheet export failed"); return Results.Problem("Could not create the workbook."); }
+});
+
 // 4) Filters remembered from earlier downloads (newest first)
 app.MapGet("/api/saved-filters", (SavedFilterStore saved, ILogger<Program> log) =>
 {
@@ -165,3 +226,6 @@ app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
 record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName);
+
+record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
+record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName);

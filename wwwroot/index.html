@@ -71,6 +71,7 @@
   .saved .meta small { display:block; color:var(--muted); }
   #savedList { max-height:220px; overflow:auto; margin-top:6px; }
   .dl { margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.sheet-list{display:flex;flex-direction:column;gap:8px}.sheet-list>.row{justify-content:flex-start;border:1px solid var(--border,#ddd);border-radius:8px;padding:8px}.sheet-list .sheet-name{font-weight:600;min-width:110px}
 </style>
 </head>
 <body>
@@ -88,8 +89,25 @@
     <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul></details>
   </section>
 
+  <section id="sheetCard" class="card hidden">
+    <h2>Output workbook</h2>
+    <div class="row" style="margin-bottom:10px">
+      <strong>Saved Sheets</strong>
+      <select id="workflowList" aria-label="Saved sheets"><option value="">Select saved sheets…</option></select>
+      <button id="loadWorkflowBtn">Load</button>
+    </div>
+    <div style="margin:10px 0"><button id="addSheetBtn">+ Add sheet</button></div>
+    <div id="sheetTabs" class="sheet-list"></div><div id="workflowStatus" class="status"></div>
+  </section>
+
   <section id="filterCard" class="card hidden">
-    <h2><span class="step">2.</span>Filter rows <span class="opt">(optional)</span></h2>
+    <div class="row" style="align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <h2 style="margin:0"><span class="step">2.</span>Filter rows <span class="opt">(optional)</span></h2>
+      <div class="row" style="align-items:center;gap:8px">
+        <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
+        <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (required)" aria-label="Filter name" style="width:220px">
+      </div>
+    </div>
     <details id="savedBox" class="hidden" open style="margin:0 0 14px">
       <summary>Saved filters from earlier downloads (<span id="savedCount">0</span>)</summary>
       <div id="savedList"></div>
@@ -120,8 +138,6 @@
       <span class="opt">File name</span>
       <input type="text" id="fileName" maxlength="100" placeholder="Research_Form_Transformed" style="width:260px">
       <span class="opt">.xlsx</span>
-      <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
-      <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (optional)" style="width:220px">
       <button id="downloadBtn" class="primary">Download Excel</button>
       <span id="dlStatus" class="status" style="margin:0"></span>
     </div>
@@ -149,6 +165,9 @@
   let dlSeq = 0;
   let matchCount = null, totalRows = 0, filterError = "";
   let savedFilters = [];     // filters remembered from earlier downloads (SQLite, server side)
+  let outputSheets = [];
+  let activeSheetIndex = 0;
+  let restoringSheet = false;
   const OP_TEXT = { contains: "contains", equals: "=", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -193,6 +212,11 @@
       $("renameToggle").checked = false;
       columns.forEach(c => selected.add(c));          // everything selected by default
       root = { mode: "and", items: [] };
+      outputSheets = [{ name: "Transformed Data", state: null }];
+      activeSheetIndex = 0;
+      $("fileName").value = f.name.replace(/\.xlsx$/i, "") + "_Transformed";
+      $("sheetCard").classList.remove("hidden");
+      renderSheetTabs();
       matchCount = totalRows = data.rowCount;
       filterError = "";
 
@@ -215,6 +239,94 @@
       $("uploadBtn").disabled = false;
     }
   };
+
+  function captureSheet() {
+    if (!outputSheets.length || activeSheetIndex < 0 || restoringSheet) return;
+    outputSheets[activeSheetIndex].state = {
+      root: JSON.parse(JSON.stringify(root)), selected: [...selected], renames: { ...renames },
+      renameEnabled: $("renameToggle").checked, fileName: $("fileName").value,
+      saveFilters: $("saveFilters").checked, saveName: $("saveName").value
+    };
+  }
+  function restoreSheet(index) {
+    captureSheet();
+    activeSheetIndex = index;
+    const sh = outputSheets[index];
+    restoringSheet = true;
+    const st = sh.state;
+    root = st ? JSON.parse(JSON.stringify(st.root)) : { mode: "and", items: [] };
+    selected.clear(); (st?.selected || columns).forEach(c => { if (columns.includes(c)) selected.add(c); }); ensureLocked();
+    renames = st ? { ...st.renames } : {};
+    $("renameToggle").checked = st?.renameEnabled || false;
+    $("fileName").value = st?.fileName || "";
+    $("saveFilters").checked = st?.saveFilters || false;
+    $("saveName").value = st?.saveName || "";
+    $("search").value = "";
+    restoringSheet = false;
+    renderSheetTabs(); renderFilters(); renderColumns(); scheduleCount();
+  }
+  function renderSheetTabs() {
+    const box = $("sheetTabs"); box.replaceChildren();
+    outputSheets.forEach((sh, i) => {
+      const wrap = el("div", "row");
+      const name = el("span", "sheet-name", sh.name + (i === activeSheetIndex ? " (editing)" : ""));
+      const edit = el("button", i === activeSheetIndex ? "primary" : "", "Edit settings");
+      edit.onclick = () => { if (i !== activeSheetIndex) restoreSheet(i); };
+      const rename = el("button", null, "Rename");
+      rename.onclick = () => {
+        const n = prompt("Output sheet name (max 31 characters):", sh.name);
+        if (n == null) return;
+        const cleaned = n.trim();
+        if (!cleaned || cleaned.length > 31 || /[\\/?*\[\]:]/.test(cleaned)) return alert("Enter a valid Excel sheet name (1–31 characters; no \\ / ? * [ ] : characters).");
+        if (outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === cleaned.toLowerCase())) return alert("Sheet names must be unique.");
+        sh.name = cleaned; renderSheetTabs();
+      };
+      const remove = el("button", null, "Remove"); remove.disabled = outputSheets.length === 1;
+      remove.onclick = () => {
+        if (outputSheets.length < 2) return;
+        outputSheets.splice(i, 1);
+        const next = Math.min(activeSheetIndex > i ? activeSheetIndex - 1 : activeSheetIndex, outputSheets.length - 1);
+        activeSheetIndex = -1; restoreSheet(next);
+      };
+      wrap.append(name, edit, rename, remove); box.append(wrap);
+    });
+  }
+  $("addSheetBtn").onclick = () => {
+    captureSheet();
+    let n = `Sheet ${outputSheets.length + 1}`, suffix = 2;
+    while (outputSheets.some(sh => sh.name.toLowerCase() === n.toLowerCase())) n = `Sheet ${outputSheets.length + 1} (${suffix++})`;
+    outputSheets.push({ name: n, state: null });
+    restoreSheet(outputSheets.length - 1);
+  };
+  const WORKFLOW_KEY = "etl-multi-sheet-workflows-v1";
+  function readWorkflows() { try { return JSON.parse(localStorage.getItem(WORKFLOW_KEY) || "[]"); } catch { return []; } }
+  function refreshWorkflowList() {
+    const sel = $("workflowList"), prior = sel.value;
+    sel.replaceChildren(new Option("Select saved sheets…", ""));
+    readWorkflows().forEach(w => sel.append(new Option(w.name, w.name)));
+    if (readWorkflows().some(w => w.name === prior)) sel.value = prior;
+  }
+  function saveCurrentWorkflow() {
+    captureSheet();
+    const fileBase = $("fileName").value.trim().replace(/\.xlsx$/i, "").trim();
+    const name = fileBase || "Transformed Data";
+    const saved = readWorkflows();
+    const workflow = { name, fileName: $("fileName").value, sheets: outputSheets.map(x => ({ name: x.name, state: x.state })) };
+    const i = saved.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
+    if (i >= 0) saved[i] = workflow; else saved.push(workflow);
+    localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); refreshWorkflowList(); $("workflowList").value = name;
+    return name;
+  }
+  $("loadWorkflowBtn").onclick = () => {
+    const name = $("workflowList").value; if (!name) return;
+    const workflow = readWorkflows().find(x => x.name === name); if (!workflow) return;
+    if (workflow.fileName) $("fileName").value = workflow.fileName;
+    outputSheets = (workflow.sheets || []).map(x => ({ name: x.name, state: x.state }));
+    if (!outputSheets.length) outputSheets = [{ name: "Transformed Data", state: null }];
+    activeSheetIndex = -1; restoreSheet(0);
+    setStatus($("workflowStatus"), `Loaded saved sheets “${name}”. Filters and columns have been restored.`, "ok");
+  };
+  refreshWorkflowList();
 
   // ------------------------------------------------------------------ filters
   const newFilter = () => { const first = info[0]; return { column: first.name, op: OPS[first.type][0][0], value: "" }; };
@@ -400,6 +512,7 @@
 
     root = toRoot(items, sf.mode);
     $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
+    $("saveFilters").checked = true;
     $("saveName").value = sf.name;
 
     // selected + renamed columns (entries saved before this was stored have none: leave the current choice alone)
@@ -482,13 +595,14 @@
   }
 
   function refresh() {
+    if (outputSheets.length && !restoringSheet) captureSheet();
     $("count").textContent = `${selected.size} of ${columns.length} selected`;
     $("filterErr").textContent = filterError;
     $("matchCount").textContent = matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows match`;
 
     const hasFilters = activeFilters().length > 0;
     $("saveFilters").disabled = !hasFilters;
-    $("saveName").classList.toggle("hidden", !($("saveFilters").checked && hasFilters));
+    $("saveName").classList.toggle("hidden", !$("saveFilters").checked);
     $("saveFiltersLbl").title = hasFilters ? "" : "Add a filter first";
     $("dl").classList.toggle("hidden", selected.size === 0);   // download appears once something is selected
     $("downloadBtn").disabled = matchCount == null || matchCount === 0;
@@ -507,41 +621,41 @@
   // ------------------------------------------------------------------ download
   $("downloadBtn").onclick = async () => {
     $("downloadBtn").disabled = true;
-    const wantSave = $("saveFilters").checked && activeFilters().length > 0;
-    setStatus($("dlStatus"), "Preparing file…");
+    captureSheet();
+    const workflowName = saveCurrentWorkflow();
+    setStatus($("dlStatus"), "Preparing workbook…");
     try {
-      const res = await fetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: sessionId,
-          columns: columns.filter(c => selected.has(c)),
-          filters: activeFilters(),
-          mode: root.mode,
-          fileName: $("fileName").value.trim(),
-          saveFilters: wantSave,
-          filterName: $("saveName").value.trim(),
-          renames: Object.fromEntries(Object.entries(renames).filter(([c]) => selected.has(c)))
-        })
+      const cleanItems = items => {
+        const out = [];
+        for (const n of items || []) {
+          if (n.items) { const sub = cleanItems(n.items); if (sub.length) out.push({ mode: n.mode, items: sub }); }
+          else if (n.value !== "" && n.value != null) out.push({ column: n.column, op: n.op, value: n.value });
+        }
+        return out;
+      };
+      const sheets = outputSheets.map(sh => {
+        const st = sh.state || { root: { mode: "and", items: [] }, selected: columns, renames: {} };
+        const rootState = st.root || { mode: "and", items: [] };
+        return { sheetName: sh.name, columns: st.selected || columns, filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renames || {}, saveFilters: !!st.saveFilters, filterName: (st.saveName || "").trim() };
       });
-      if (!res.ok) throw new Error((await res.json()).error || "Export failed");
-
-      const blob = await res.blob();
+      const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
+      if (missingFilterName) {
+        restoreSheet(outputSheets.findIndex(sh => sh.name === missingFilterName.sheetName));
+        setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or uncheck Remember these filters.`, "err");
+        $("saveName").focus();
+        return;
+      }
+      const res = await fetch("/api/export-multiple", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: sessionId, fileName: $("fileName").value.trim(), sheets })
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Export failed."); }
+      const blob = await res.blob(), url = URL.createObjectURL(blob), a = el("a");
       const cd = res.headers.get("Content-Disposition") || "";
       const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = m ? decodeURIComponent(m[1]) : "transformed.xlsx";
-      document.body.append(a); a.click(); a.remove();
-      URL.revokeObjectURL(a.href);
-      refresh();
-      let msg = "Downloaded.", cls = "ok";
-      if (wantSave) {
-        if (res.headers.get("X-Filters-Saved") === "1") msg = "Downloaded. Filters saved.";
-        else { msg = "Downloaded, but the filters could not be saved."; cls = "err"; }
-        loadSaved();
-      }
-      setStatus($("dlStatus"), msg, cls);
+      a.href = url; a.download = m ? decodeURIComponent(m[1]) : "transformed.xlsx"; document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      refresh(); loadSaved(); refreshWorkflowList();
+      setStatus($("dlStatus"), `Downloaded all sheets. Workflow “${workflowName}” saved with each sheet’s filters and columns.`, "ok");
     } catch (e) {
       setStatus($("dlStatus"), e.message, "err");
     } finally {
