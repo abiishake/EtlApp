@@ -308,6 +308,8 @@
       meta.append(
         el("b", null, sf.name),
         el("small", null, "File: " + sf.fileName),
+        ...(sf.columns ? [el("small", null,
+          `Columns: ${sf.columns.length} selected` + (Object.keys(sf.renames || {}).length ? `, ${Object.keys(sf.renames).length} renamed` : ""))] : []),
         el("small", null, sf.filters.map(f => `${f.column} ${OP_TEXT[f.op] || f.op} ${f.value}`).join(join)),
         el("small", null, "Saved " + new Date(sf.savedAt).toLocaleString()));
       const use = el("button", null, "Apply");
@@ -338,11 +340,30 @@
     $("filterMode").value = mode;
     $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
     $("saveName").value = sf.name;
+
+    // selected + renamed columns (entries saved before this was stored have none: leave the current choice alone)
+    const colsMissing = [];
+    if (sf.columns && sf.columns.length) {
+      const have = new Set(columns);
+      const keep = sf.columns.filter(c => have.has(c));
+      colsMissing.push(...sf.columns.filter(c => !have.has(c)));
+      if (keep.length) {
+        selected.clear();
+        keep.forEach(c => selected.add(c));
+        renames = {};
+        Object.entries(sf.renames || {}).forEach(([c, n]) => { if (selected.has(c) && n) renames[c] = n; });
+        $("renameToggle").checked = Object.keys(renames).length > 0;
+        renderColumns();
+      } else colsMissing.push("(none of the saved columns exist in this file, kept the current selection)");
+    }
+
     renderFilters(); scheduleCount();
+    const warn = [];
+    if (skipped.length) warn.push(`skipped filters on missing/incompatible columns: ${[...new Set(skipped)].join(", ")}`);
+    if (colsMissing.length) warn.push(`columns not found: ${colsMissing.join(", ")}`);
     setStatus($("savedMsg"),
-      skipped.length ? `Applied, but skipped filters on missing/incompatible columns: ${[...new Set(skipped)].join(", ")}`
-                     : `Applied the saved filter "${sf.name}".`,
-      skipped.length ? "err" : "ok");
+      warn.length ? `Applied, but ${warn.join("; ")}` : `Applied the saved filter "${sf.name}".`,
+      warn.length ? "err" : "ok");
   }
 
   // live "N of M rows match" (debounced; ignores out-of-date answers)

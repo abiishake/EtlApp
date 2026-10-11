@@ -117,7 +117,10 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
             var filterName = body.FilterName?.Trim();
             if (string.IsNullOrEmpty(filterName)) filterName = fileName;          // default: the file name
             if (filterName.Length > 100) filterName = filterName[..100].TrimEnd();
-            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active); savedOk = true; }
+            var keptRenames = new Dictionary<string, string>();       // only columns that actually got a new header
+            for (var i = 0; i < columns.Count; i++)
+                if (headers[i] != columns[i]) keptRenames[columns[i]] = headers[i];
+            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, columns, keptRenames); savedOk = true; }
             catch (Exception ex) { log.LogWarning(ex, "Could not save filters"); }
         }
         http.Response.Headers["X-Filters-Saved"] = savedOk ? "1" : "0";
