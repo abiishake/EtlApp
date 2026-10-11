@@ -75,8 +75,9 @@ public static class ExcelIo
         return f.Length > 0 && f.IndexOfAny(new[] { 'y', 'Y', 'd', 'D' }) >= 0 && f.IndexOfAny(new[] { '0', '#' }) < 0;
     }
 
-    public static byte[] Write(TransformResult data, IReadOnlyList<string> columns)
+    public static byte[] Write(TransformResult data, IReadOnlyList<string> columns, IReadOnlyList<string>? headers = null)
     {
+        headers ??= columns;   // header text shown in row 1 (defaults to the column names)
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Transformed Data");
 
@@ -84,13 +85,13 @@ public static class ExcelIo
         for (int c = 0; c < columns.Count; c++)
         {
             var cell = ws.Cell(1, c + 1);
-            cell.Value = columns[c];
+            cell.Value = headers[c];
             cell.Style.Font.Bold = true;
             cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#E8EEF7");
         }
 
         // body
-        var widths = columns.Select(c => Math.Min(c.Length, 40)).ToArray();
+        var widths = headers.Select(c => Math.Min(c.Length, 40)).ToArray();
         for (int r = 0; r < data.Rows.Count; r++)
         {
             var row = data.Rows[r];
