@@ -59,6 +59,11 @@
   .col .rn { flex:0 1 240px; width:240px; }
   .tgl { display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--muted); font-size:13px; }
   .tag { margin-left:auto; flex:none; font-size:11px; font-style:normal; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:0 8px; }
+  .saved { display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); }
+  .saved:last-child { border-bottom:0; }
+  .saved .meta { flex:1; min-width:0; overflow-wrap:anywhere; color:var(--text); }
+  .saved .meta small { display:block; color:var(--muted); }
+  #savedList { max-height:220px; overflow:auto; margin-top:6px; }
   .dl { margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 </style>
 </head>
@@ -79,6 +84,11 @@
 
   <section id="filterCard" class="card hidden">
     <h2><span class="step">2.</span>Filter rows <span class="opt">(optional)</span></h2>
+    <details id="savedBox" class="hidden" open style="margin:0 0 14px">
+      <summary>Saved filters from earlier downloads (<span id="savedCount">0</span>)</summary>
+      <div id="savedList"></div>
+      <div id="savedMsg" class="status" style="margin-top:6px"></div>
+    </details>
     <div class="row" style="margin-bottom:10px">
       <span class="opt">Match rows that satisfy</span>
       <select id="filterMode">
@@ -111,6 +121,8 @@
       <span class="opt">File name</span>
       <input type="text" id="fileName" maxlength="100" placeholder="Research_Form_Transformed" style="width:260px">
       <span class="opt">.xlsx</span>
+      <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
+      <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (optional)" style="width:220px">
       <button id="downloadBtn" class="primary">Download Excel</button>
       <span id="dlStatus" class="status" style="margin:0"></span>
     </div>
@@ -135,6 +147,8 @@
   let filters = [];          // [{column, op, value}]
   let mode = "and";          // how filters combine: "and" | "or"
   let matchCount = null, totalRows = 0, filterError = "";
+  let savedFilters = [];     // filters remembered from earlier downloads (SQLite, server side)
+  const OP_TEXT = { contains: "contains", equals: "=", eq: "=", gt: ">", lt: "<" };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
@@ -180,8 +194,10 @@
       $("notes").classList.toggle("hidden", data.notes.length === 0);
 
       $("search").value = "";
+      setStatus($("savedMsg"), "");
       renderFilters();
       renderColumns();
+      loadSaved();
       $("filterCard").classList.remove("hidden");
       $("pick").classList.remove("hidden");
     } catch (e) {
@@ -272,6 +288,63 @@
     refresh();
   }
 
+  // ------------------------------------------------------------------ saved filters
+  async function loadSaved() {
+    try {
+      const res = await fetch("/api/saved-filters");
+      if (!res.ok) throw new Error();
+      savedFilters = await res.json();
+    } catch { savedFilters = []; }
+    renderSaved();
+  }
+
+  function renderSaved() {
+    $("savedCount").textContent = savedFilters.length;
+    $("savedBox").classList.toggle("hidden", savedFilters.length === 0);
+    $("savedList").replaceChildren(...savedFilters.map(sf => {
+      const row = el("div", "saved");
+      const meta = el("div", "meta");
+      const join = sf.mode === "or" ? "  OR  " : "  AND  ";
+      meta.append(
+        el("b", null, sf.name),
+        el("small", null, "File: " + sf.fileName),
+        el("small", null, sf.filters.map(f => `${f.column} ${OP_TEXT[f.op] || f.op} ${f.value}`).join(join)),
+        el("small", null, "Saved " + new Date(sf.savedAt).toLocaleString()));
+      const use = el("button", null, "Apply");
+      use.onclick = () => applySaved(sf);
+      const del = el("button", "x", "✕");
+      del.title = "Delete saved filters";
+      del.onclick = async () => {
+        if (!confirm(`Delete the saved filter "${sf.name}"?`)) return;
+        await fetch("/api/saved-filters/" + sf.id, { method: "DELETE" });
+        loadSaved();
+      };
+      row.append(meta, use, del);
+      return row;
+    }));
+  }
+
+  function applySaved(sf) {
+    const ok = [], skipped = [];
+    sf.filters.forEach(f => {
+      const ci = byName[f.column];
+      if (ci && OPS[ci.type].some(o => o[0] === f.op)) ok.push({ column: f.column, op: f.op, value: f.value });
+      else skipped.push(f.column);
+    });
+    if (ok.length === 0) return setStatus($("savedMsg"), "None of these filters fit the columns of this file.", "err");
+
+    filters = ok;
+    mode = sf.mode === "or" ? "or" : "and";
+    $("filterMode").value = mode;
+    $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
+    $("saveName").value = sf.name;
+    renderFilters(); scheduleCount();
+    setStatus($("savedMsg"),
+      skipped.length ? `Applied, but skipped filters on missing/incompatible columns: ${[...new Set(skipped)].join(", ")}`
+                     : `Applied the saved filter "${sf.name}".`,
+      skipped.length ? "err" : "ok");
+  }
+
   // live "N of M rows match" (debounced; ignores out-of-date answers)
   let timer = null, reqNo = 0;
   function scheduleCount() { clearTimeout(timer); timer = setTimeout(runCount, 250); }
@@ -328,6 +401,10 @@
     $("filterErr").textContent = filterError;
     $("matchCount").textContent = matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows match`;
 
+    const hasFilters = activeFilters().length > 0;
+    $("saveFilters").disabled = !hasFilters;
+    $("saveName").classList.toggle("hidden", !($("saveFilters").checked && hasFilters));
+    $("saveFiltersLbl").title = hasFilters ? "" : "Add a filter first";
     $("dl").classList.toggle("hidden", selected.size === 0);   // download appears once something is selected
     $("downloadBtn").disabled = matchCount == null || matchCount === 0;
     setStatus($("dlStatus"),
@@ -336,6 +413,7 @@
       : `Will export ${fmt(matchCount)} rows × ${selected.size} columns`);
   }
 
+  $("saveFilters").onchange = refresh;
   $("search").oninput = renderColumns;
   $("renameToggle").onchange = renderColumns;
   $("allBtn").onclick  = () => { columns.forEach(c => selected.add(c)); renderColumns(); };
@@ -344,6 +422,7 @@
   // ------------------------------------------------------------------ download
   $("downloadBtn").onclick = async () => {
     $("downloadBtn").disabled = true;
+    const wantSave = $("saveFilters").checked && activeFilters().length > 0;
     setStatus($("dlStatus"), "Preparing file…");
     try {
       const res = await fetch("/api/export", {
@@ -355,6 +434,8 @@
           filters: activeFilters(),
           mode,
           fileName: $("fileName").value.trim(),
+          saveFilters: wantSave,
+          filterName: $("saveName").value.trim(),
           renames: Object.fromEntries(Object.entries(renames).filter(([c]) => selected.has(c)))
         })
       });
@@ -369,7 +450,13 @@
       document.body.append(a); a.click(); a.remove();
       URL.revokeObjectURL(a.href);
       refresh();
-      setStatus($("dlStatus"), "Downloaded.", "ok");
+      let msg = "Downloaded.", cls = "ok";
+      if (wantSave) {
+        if (res.headers.get("X-Filters-Saved") === "1") msg = "Downloaded. Filters saved.";
+        else { msg = "Downloaded, but the filters could not be saved."; cls = "err"; }
+        loadSaved();
+      }
+      setStatus($("dlStatus"), msg, cls);
     } catch (e) {
       setStatus($("dlStatus"), e.message, "err");
     } finally {

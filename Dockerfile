@@ -13,7 +13,9 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true \
     DOTNET_gcServer=0 \
     DOTNET_TieredPGO=0
+ENV DATA_DIR=/data
 COPY --from=build /out .
+RUN mkdir -p /data && chown $APP_UID /data
 USER $APP_UID
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "EtlApp.dll"]

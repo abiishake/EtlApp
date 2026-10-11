@@ -7,3 +7,5 @@ services:
     restart: unless-stopped
     mem_limit: 256m        # hard caps so it can never starve the media server
     cpus: 0.5
+    volumes:
+      - ./data:/data       # SQLite file (saved filters) lives here: ./data/etl.db  -> back up this folder

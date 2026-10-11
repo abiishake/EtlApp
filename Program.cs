@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = MaxUploadBytes);
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = MaxUploadBytes);
 builder.Services.AddSingleton<SessionStore>();
+builder.Services.AddSingleton<SavedFilterStore>();
 
 var app = builder.Build();
 
@@ -75,7 +76,7 @@ app.MapPost("/api/count", (CountRequest body, SessionStore store) =>
 });
 
 // 3) Export the chosen columns of the (filtered) transformed data as .xlsx
-app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
+app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterStore saved, HttpContext http, ILogger<Program> log) =>
 {
     var data = store.Get(body.Id ?? "");
     if (data == null)
@@ -104,10 +105,48 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
     // optional custom file name; the extension is always .xlsx (any typed extension is dropped)
     var baseName = SanitizeFileName(body.FileName);
     var fileName = baseName != null ? $"{baseName}.xlsx" : $"Research_Form_Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
+    // optionally remember the filters under the downloaded file name (a failure here must not block the download)
+    if (body.SaveFilters == true)
+    {
+        var active = (body.Filters ?? new List<FilterSpec>())
+            .Where(f => !string.IsNullOrWhiteSpace(f.Value))
+            .Select(f => f with { Value = f.Value!.Trim() }).ToList();
+        var savedOk = false;
+        if (active.Count > 0)
+        {
+            var filterName = body.FilterName?.Trim();
+            if (string.IsNullOrEmpty(filterName)) filterName = fileName;          // default: the file name
+            if (filterName.Length > 100) filterName = filterName[..100].TrimEnd();
+            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active); savedOk = true; }
+            catch (Exception ex) { log.LogWarning(ex, "Could not save filters"); }
+        }
+        http.Response.Headers["X-Filters-Saved"] = savedOk ? "1" : "0";
+    }
     return Results.File(
         bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         fileName);
+});
+
+// 4) Filters remembered from earlier downloads (newest first)
+app.MapGet("/api/saved-filters", (SavedFilterStore saved, ILogger<Program> log) =>
+{
+    try { return Results.Ok(saved.List()); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not read saved filters");
+        return Results.Json(new { error = "Saved filters are unavailable." }, statusCode: 500);
+    }
+});
+
+app.MapDelete("/api/saved-filters/{id:long}", (long id, SavedFilterStore saved, ILogger<Program> log) =>
+{
+    try { return saved.Delete(id) ? Results.Ok() : Results.NotFound(new { error = "Not found." }); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not delete saved filter");
+        return Results.Json(new { error = "Could not delete." }, statusCode: 500);
+    }
 });
 
 static string? SanitizeFileName(string? name)
@@ -124,4 +163,4 @@ static string? SanitizeFileName(string? name)
 app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName);

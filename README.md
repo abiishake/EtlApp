@@ -11,7 +11,13 @@ Open http://localhost:8085 (or http://<server-ip>:8085 from another device).
 
     docker compose down      # stop it whenever you don't need it
 
-Nothing is stored on disk: the uploaded data is kept in memory for 1 hour, then discarded.
+Uploaded data is kept in memory for 1 hour, then discarded.
+The only thing stored on disk is the "saved filters" list (SQLite file `./data/etl.db`, mounted into the container at `/data`).
+First run on the server (the container runs as a non-root user):
+
+    mkdir -p data && sudo chown 1654:1654 data
+
+Backup: stop the container and copy `data/etl.db`, or run `sqlite3 data/etl.db ".backup 'etl-backup.db'"` while it is running.
 There is no login, so keep it on your LAN.
 
 ## Where the ETL rules live
