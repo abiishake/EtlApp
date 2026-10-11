@@ -108,6 +108,9 @@
     <div id="cols"></div>
 
     <div id="dl" class="dl hidden">
+      <span class="opt">File name</span>
+      <input type="text" id="fileName" maxlength="100" placeholder="Research_Form_Transformed" style="width:260px">
+      <span class="opt">.xlsx</span>
       <button id="downloadBtn" class="primary">Download Excel</button>
       <span id="dlStatus" class="status" style="margin:0"></span>
     </div>
@@ -351,6 +354,7 @@
           columns: columns.filter(c => selected.has(c)),
           filters: activeFilters(),
           mode,
+          fileName: $("fileName").value.trim(),
           renames: Object.fromEntries(Object.entries(renames).filter(([c]) => selected.has(c)))
         })
       });

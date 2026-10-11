@@ -101,13 +101,27 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
         return Results.BadRequest(new { error = $"Duplicate column name \"{dup.Key}\" after renaming. Please use unique names." });
 
     var bytes = ExcelIo.Write(data with { Rows = rows }, columns, headers);
+    // optional custom file name; the extension is always .xlsx (any typed extension is dropped)
+    var baseName = SanitizeFileName(body.FileName);
+    var fileName = baseName != null ? $"{baseName}.xlsx" : $"Research_Form_Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
     return Results.File(
         bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        $"Research_Form_Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
+        fileName);
 });
+
+static string? SanitizeFileName(string? name)
+{
+    if (string.IsNullOrWhiteSpace(name)) return null;
+    var n = name.Trim();
+    if (n.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)) n = n[..^5];
+    n = new string(n.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch) && !char.IsControl(ch)).ToArray());
+    n = n.Trim().TrimEnd('.');
+    if (n.Length > 100) n = n[..100].TrimEnd();
+    return n.Length == 0 ? null : n;
+}
 
 app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName);
