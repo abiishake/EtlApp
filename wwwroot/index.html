@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research Form ETL</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#667085; --line:#e3e6ec;
+    --accent:#2563eb; --accent-d:#1d4ed8; --ok:#16794a; --err:#b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --card:#1b2029; --text:#e8ebf1; --muted:#9aa3b2; --line:#2a303c;
+            --accent:#4f8cff; --accent-d:#3b78ec; --ok:#4cc38a; --err:#ff7b72; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  .step { color:var(--muted); font-weight:500; margin-right:6px; }
+  .opt { color:var(--muted); font-weight:400; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input, select, button { font:inherit; color:var(--text); }
+  input[type=file] { flex:1; min-width:220px; padding:8px; border:1px dashed var(--line); border-radius:8px; background:transparent; }
+  input[type=text], input[type=number], input[type=search], select {
+    padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); min-width:0; }
+  select option { background:var(--card); color:var(--text); }
+  button { padding:8px 16px; border-radius:8px; border:1px solid var(--line); background:transparent; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.primary:hover:not(:disabled) { background:var(--accent-d); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .status { margin-top:12px; color:var(--muted); }
+  .status.ok { color:var(--ok); } .status.err { color:var(--err); }
+  details { margin-top:10px; color:var(--muted); font-size:13px; }
+  details ul { margin:6px 0 0; padding-left:18px; }
+  .count { color:var(--muted); font-size:13px; margin-left:auto; }
+  .hidden { display:none !important; }
+
+  /* filters */
+  .frow { display:grid; grid-template-columns:minmax(160px,1.4fr) 140px minmax(160px,1.2fr) auto; gap:8px; align-items:center; margin-bottom:4px; }
+  .frow .x { padding:6px 10px; }
+  .fhint { grid-column:1 / -1; color:var(--muted); font-size:12px; margin:0 0 10px 2px; }
+  .empty { color:var(--muted); font-size:13px; margin:0 0 8px; }
+  @media (max-width:640px) { .frow { grid-template-columns:1fr 1fr; } }
+
+  /* column picker */
+  #search { flex:1; min-width:180px; }
+  #cols { margin-top:14px; max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .col { display:flex; gap:10px; align-items:center; padding:7px 12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .col:last-child { border-bottom:0; }
+  .col:hover { background:rgba(127,127,127,.08); }
+  .col input { width:16px; height:16px; flex:none; }
+  .col span { overflow-wrap:anywhere; }
+  .tag { margin-left:auto; flex:none; font-size:11px; font-style:normal; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:0 8px; }
+  .dl { margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Research Form ETL</h1>
+  <p class="sub">Upload the Excel file, optionally filter the rows, pick the columns you want, download the transformed sheet.</p>
+
+  <section class="card">
+    <h2><span class="step">1.</span>Upload Excel file</h2>
+    <div class="row">
+      <input id="file" type="file" accept=".xlsx">
+      <button id="uploadBtn" class="primary">Upload &amp; transform</button>
+    </div>
+    <div id="status" class="status"></div>
+    <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul></details>
+  </section>
+
+  <section id="filterCard" class="card hidden">
+    <h2><span class="step">2.</span>Filter rows <span class="opt">(optional - all filters must match)</span></h2>
+    <p id="noFilters" class="empty">No filters: all rows will be exported.</p>
+    <div id="filters"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="addFilter">+ Add filter</button>
+      <button id="clearFilters">Clear filters</button>
+      <span id="matchCount" class="count"></span>
+    </div>
+    <div id="filterErr" class="status err"></div>
+  </section>
+
+  <section id="pick" class="card hidden">
+    <h2><span class="step">3.</span>Choose columns for the export</h2>
+    <div class="row">
+      <input id="search" type="search" placeholder="Filter columns…">
+      <button id="allBtn">Select all</button>
+      <button id="noneBtn">Select none</button>
+      <span id="count" class="count"></span>
+    </div>
+    <div id="cols"></div>
+
+    <div id="dl" class="dl hidden">
+      <button id="downloadBtn" class="primary">Download Excel</button>
+      <span id="dlStatus" class="status" style="margin:0"></span>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const CALCULATED = new Set(["Age", "Is Sample Twin", "Left Hand Ratio (2D:4D)", "Right Hand Ratio (2D:4D)"]);
+  const OPS = {
+    text:   [["contains", "Contains"], ["equals", "Equals"]],
+    number: [["gt", "Greater than"], ["lt", "Less than"], ["eq", "Equal"]]
+  };
+
+  let sessionId = null;
+  let info = [];             // column metadata from the server: {name,type,distinctCount,values,min,max}
+  let byName = {};
+  let columns = [];          // final columns, in order
+  const selected = new Set();
+  let filters = [];          // [{column, op, value}]
+  let matchCount = null, totalRows = 0, filterError = "";
+
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
+  const activeFilters = () => filters.filter(f => f.value !== "" && f.value != null);
+  const fmt = n => Number(n).toLocaleString();
+
+  // ------------------------------------------------------------------ upload
+  $("uploadBtn").onclick = async () => {
+    const f = $("file").files[0];
+    if (!f) return setStatus($("status"), "Choose an .xlsx file first.", "err");
+
+    $("uploadBtn").disabled = true;
+    $("pick").classList.add("hidden");
+    $("filterCard").classList.add("hidden");
+    $("notes").classList.add("hidden");
+    setStatus($("status"), "Uploading and transforming…");
+
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      sessionId = data.id;
+      info = data.columnInfo;
+      byName = Object.fromEntries(info.map(c => [c.name, c]));
+      columns = data.columns;
+      selected.clear();
+      columns.forEach(c => selected.add(c));          // everything selected by default
+      filters = [];
+      matchCount = totalRows = data.rowCount;
+      filterError = "";
+
+      setStatus($("status"),
+        `Done: ${fmt(data.rowCount)} rows, ${columns.length} columns (sheet “${data.sheet}”).`, "ok");
+
+      $("notesList").replaceChildren(...data.notes.map(n => el("li", null, n)));
+      $("notes").classList.toggle("hidden", data.notes.length === 0);
+
+      $("search").value = "";
+      renderFilters();
+      renderColumns();
+      $("filterCard").classList.remove("hidden");
+      $("pick").classList.remove("hidden");
+    } catch (e) {
+      setStatus($("status"), e.message, "err");
+    } finally {
+      $("uploadBtn").disabled = false;
+    }
+  };
+
+  // ------------------------------------------------------------------ filters
+  $("addFilter").onclick = () => {
+    const first = info[0];
+    filters.push({ column: first.name, op: OPS[first.type][0][0], value: "" });
+    renderFilters();
+  };
+  $("clearFilters").onclick = () => { filters = []; renderFilters(); scheduleCount(); };
+
+  function makeSelect(options, current) {
+    const s = document.createElement("select");
+    options.forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value; o.textContent = label;
+      if (value === current) o.selected = true;
+      s.append(o);
+    });
+    return s;
+  }
+
+  function renderFilters() {
+    const box = $("filters");
+    box.replaceChildren();
+    $("noFilters").classList.toggle("hidden", filters.length > 0);
+
+    filters.forEach((f, i) => {
+      const ci = byName[f.column];
+      const row = el("div", "frow");
+
+      // column
+      const colSel = makeSelect(info.map(c => [c.name, c.type === "number" ? `${c.name}  (number)` : c.name]), f.column);
+      colSel.onchange = () => {
+        f.column = colSel.value;
+        f.op = OPS[byName[f.column].type][0][0];
+        f.value = "";
+        renderFilters(); scheduleCount();
+      };
+
+      // operator
+      const opSel = makeSelect(OPS[ci.type], f.op);
+      opSel.onchange = () => { f.op = opSel.value; f.value = ""; renderFilters(); scheduleCount(); };
+
+      // value
+      let valueCtl;
+      if (ci.type === "text" && f.op === "equals" && ci.values) {
+        valueCtl = makeSelect([["", "— choose a value —"], ...ci.values.map(v => [v.value, `${v.value}  (${fmt(v.count)})`])], f.value);
+        valueCtl.onchange = () => { f.value = valueCtl.value; scheduleCount(); };
+      } else {
+        valueCtl = document.createElement("input");
+        valueCtl.type = ci.type === "number" ? "number" : "text";
+        if (ci.type === "number") valueCtl.step = "any";
+        valueCtl.placeholder = ci.type === "number" ? "number" : "text";
+        valueCtl.value = f.value;
+        if (ci.values) {                                  // suggestions from the distinct values
+          const dl = document.createElement("datalist");
+          dl.id = "dl-" + i;
+          ci.values.forEach(v => { const o = document.createElement("option"); o.value = v.value; dl.append(o); });
+          valueCtl.setAttribute("list", dl.id);
+          row.append(dl);
+        }
+        valueCtl.oninput = () => { f.value = valueCtl.value.trim(); scheduleCount(); };
+      }
+
+      // remove
+      const rm = el("button", "x", "✕");
+      rm.title = "Remove filter";
+      rm.onclick = () => { filters.splice(i, 1); renderFilters(); scheduleCount(); };
+
+      // hint under the row: distinct values / range
+      let hint;
+      if (ci.type === "number")
+        hint = `${fmt(ci.distinctCount)} distinct values, range ${ci.min} to ${ci.max}`;
+      else
+        hint = ci.values ? `${fmt(ci.distinctCount)} distinct values` : `${fmt(ci.distinctCount)} distinct values (too many to list)`;
+
+      row.append(colSel, opSel, valueCtl, rm, el("div", "fhint", hint));
+      box.append(row);
+    });
+    refresh();
+  }
+
+  // live "N of M rows match" (debounced; ignores out-of-date answers)
+  let timer = null, reqNo = 0;
+  function scheduleCount() { clearTimeout(timer); timer = setTimeout(runCount, 250); }
+
+  async function runCount() {
+    const mine = ++reqNo;
+    try {
+      const res = await fetch("/api/count", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: sessionId, filters: activeFilters() })
+      });
+      const data = await res.json();
+      if (mine !== reqNo) return;
+      if (!res.ok) { filterError = data.error || "Filter error"; matchCount = null; }
+      else { filterError = ""; matchCount = data.count; totalRows = data.total; }
+    } catch (e) {
+      if (mine !== reqNo) return;
+      filterError = e.message; matchCount = null;
+    }
+    refresh();
+  }
+
+  // ------------------------------------------------------------------ column picker
+  function renderColumns() {
+    const q = $("search").value.trim().toLowerCase();
+    const box = $("cols");
+    box.replaceChildren();
+    columns.filter(c => c.toLowerCase().includes(q)).forEach(c => {
+      const label = el("label", "col");
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = selected.has(c);
+      cb.onchange = () => { cb.checked ? selected.add(c) : selected.delete(c); refresh(); };
+
+      label.append(cb, el("span", null, c));
+      if (CALCULATED.has(c)) label.append(el("em", "tag", "calculated"));
+      box.append(label);
+    });
+    refresh();
+  }
+
+  function refresh() {
+    $("count").textContent = `${selected.size} of ${columns.length} selected`;
+    $("filterErr").textContent = filterError;
+    $("matchCount").textContent = matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows match`;
+
+    $("dl").classList.toggle("hidden", selected.size === 0);   // download appears once something is selected
+    $("downloadBtn").disabled = matchCount == null || matchCount === 0;
+    setStatus($("dlStatus"),
+      matchCount === 0 ? "No rows match the filters."
+      : matchCount == null ? ""
+      : `Will export ${fmt(matchCount)} rows × ${selected.size} columns`);
+  }
+
+  $("search").oninput = renderColumns;
+  $("allBtn").onclick  = () => { columns.forEach(c => selected.add(c)); renderColumns(); };
+  $("noneBtn").onclick = () => { selected.clear(); renderColumns(); };
+
+  // ------------------------------------------------------------------ download
+  $("downloadBtn").onclick = async () => {
+    $("downloadBtn").disabled = true;
+    setStatus($("dlStatus"), "Preparing file…");
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: sessionId,
+          columns: columns.filter(c => selected.has(c)),
+          filters: activeFilters()
+        })
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Export failed");
+
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? decodeURIComponent(m[1]) : "transformed.xlsx";
+      document.body.append(a); a.click(); a.remove();
+      URL.revokeObjectURL(a.href);
+      refresh();
+      setStatus($("dlStatus"), "Downloaded.", "ok");
+    } catch (e) {
+      setStatus($("dlStatus"), e.message, "err");
+    } finally {
+      $("downloadBtn").disabled = matchCount == null || matchCount === 0;
+    }
+  };
+})();
+</script>
+</body>
+</html>
