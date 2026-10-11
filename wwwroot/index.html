@@ -45,10 +45,11 @@
   .frow { display:grid; grid-template-columns:minmax(160px,1.4fr) 190px minmax(160px,1.2fr) auto; gap:8px; align-items:center; margin-bottom:4px; }
   .frow .x { padding:6px 10px; }
   .fhint { grid-column:1 / -1; color:var(--muted); font-size:12px; margin:0 0 10px 2px; }
-  .grp { margin:6px 0; }
-  .grp.nested { border-left:3px solid var(--accent); padding:6px 0 2px 12px; margin:8px 0 8px 4px; }
+  .gbox { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .gbox .gbox { margin:8px 0 8px 4px; border-left:3px solid var(--accent); }
   .ghead { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
   .ghead .x { padding:5px 10px; }
+  .gconn { display:flex; align-items:center; justify-content:center; gap:8px; margin:8px 0; }
   .gempty { color:var(--muted); font-size:12px; margin:0 0 6px 2px; }
   .empty { color:var(--muted); font-size:13px; margin:0 0 8px; }
   @media (max-width:640px) { .frow { grid-template-columns:1fr 1fr; } }
@@ -94,10 +95,9 @@
       <div id="savedList"></div>
       <div id="savedMsg" class="status" style="margin-top:6px"></div>
     </details>
-    <p id="noFilters" class="empty">No filters: all rows will be exported.</p>
+    <p id="noFilters" class="empty">No filters: all rows will be exported. Add a group to start filtering.</p>
     <div id="filters"></div>
     <div class="row" style="margin-top:8px">
-      <button id="addFilter">+ Add filter</button>
       <button id="addGroup">+ Add group</button>
       <button id="clearFilters">Clear filters</button>
       <span id="matchCount" class="count"></span>
@@ -132,6 +132,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const CALCULATED = new Set(["Age", "Is Sample Twin", "Left Hand Ratio (2D:4D)", "Right Hand Ratio (2D:4D)"]);
+  const LOCKED = new Set(["Id"]);       // columns that are always exported (cannot be unselected)
   const OPS = {
     text:   [["contains", "Contains"], ["equals", "Equals"]],
     number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"]]
@@ -162,7 +163,7 @@
     return out;
   };
   const activeFilters = () => activeItems(root.items);
-  const flip = m => (m === "and" ? "or" : "and");
+  const ensureLocked = () => LOCKED.forEach(c => { if (columns.includes(c)) selected.add(c); });
   const fmt = n => Number(n).toLocaleString();
 
   // ------------------------------------------------------------------ upload
@@ -217,8 +218,7 @@
 
   // ------------------------------------------------------------------ filters
   const newFilter = () => { const first = info[0]; return { column: first.name, op: OPS[first.type][0][0], value: "" }; };
-  $("addFilter").onclick = () => { root.items.push(newFilter()); renderFilters(); };
-  $("addGroup").onclick = () => { root.items.push({ mode: flip(root.mode), items: [newFilter()] }); renderFilters(); };
+  $("addGroup").onclick = () => { root.items.push({ mode: "and", items: [newFilter()] }); renderFilters(); };
   $("clearFilters").onclick = () => { root.items = []; renderFilters(); scheduleCount(); };
 
   function makeSelect(options, current) {
@@ -232,34 +232,45 @@
     return s;
   }
 
+  // Layout: [Group 1]  -- AND/OR --  [Group 2]  -- AND/OR --  ...   (root.mode joins the groups)
+  // and inside every group its own AND/OR joins that group's filters.
   function renderFilters() {
     const box = $("filters");
     box.replaceChildren();
     $("noFilters").classList.toggle("hidden", root.items.length > 0);
-    if (root.items.length > 0) box.append(renderGroup(root, null));
+    root.items.forEach((n, i) => {
+      if (i > 0) box.append(renderConnector());
+      box.append(n.items ? renderGroup(n, root, "Group " + (i + 1)) : renderFilter(n, root));
+    });
     refresh();
   }
 
-  // one AND/OR group: header (mode + group buttons) followed by its filters and nested groups
-  function renderGroup(g, parent) {
-    const box = el("div", "grp" + (parent ? " nested" : ""));
+  // the AND/OR between two groups (one value for the whole list, so every connector shows the same choice)
+  function renderConnector() {
+    const c = el("div", "gconn");
+    c.append(el("span", "opt", "Combine the groups with"));
+    const sel = makeSelect([["and", "AND (both groups must match)"], ["or", "OR (either group may match)"]], root.mode);
+    sel.onchange = () => { root.mode = sel.value; renderFilters(); scheduleCount(); };
+    c.append(sel);
+    return c;
+  }
+
+  // one group: its own AND/OR for the filters inside it
+  function renderGroup(g, parent, title) {
+    const box = el("div", "gbox");
     const head = el("div", "ghead");
-    head.append(el("span", "opt", parent ? "Match" : "Match rows that satisfy"));
-    const sel = makeSelect([["and", "ALL of these (AND)"], ["or", "ANY of these (OR)"]], g.mode);
+    head.append(el("b", null, title), el("span", "opt", "Match"));
+    const sel = makeSelect([["and", "ALL of its filters (AND)"], ["or", "ANY of its filters (OR)"]], g.mode);
     sel.onchange = () => { g.mode = sel.value; scheduleCount(); };
-    head.append(sel);
-    if (parent) {
-      const addF = el("button", null, "+ Filter");
-      addF.onclick = () => { g.items.push(newFilter()); renderFilters(); };
-      const addG = el("button", null, "+ Group");
-      addG.onclick = () => { g.items.push({ mode: flip(g.mode), items: [newFilter()] }); renderFilters(); };
-      const rm = el("button", "x", "✕");
-      rm.title = "Remove group";
-      rm.onclick = () => { parent.items.splice(parent.items.indexOf(g), 1); renderFilters(); scheduleCount(); };
-      head.append(addF, addG, rm);
-    }
+    const addF = el("button", null, "+ Add filter");
+    addF.onclick = () => { g.items.push(newFilter()); renderFilters(); };
+    const rm = el("button", "x", "✕");
+    rm.title = "Remove group";
+    rm.onclick = () => { parent.items.splice(parent.items.indexOf(g), 1); renderFilters(); scheduleCount(); };
+    head.append(sel, addF, rm);
     box.append(head);
-    g.items.forEach(n => box.append(n.items ? renderGroup(n, g) : renderFilter(n, g)));
+    if (g.items.length === 0) box.append(el("p", "gempty", "Empty group: add a filter."));
+    g.items.forEach((n, i) => box.append(n.items ? renderGroup(n, g, "Sub-group") : renderFilter(n, g)));
     return box;
   }
 
@@ -348,6 +359,13 @@
     return out;
   }
 
+  // groups at the top, joined by `mode`; loose filters (older saved entries) are wrapped into one group
+  function toRoot(items, mode) {
+    mode = mode === "or" ? "or" : "and";
+    const loose = items.filter(n => !n.items), groups = items.filter(n => n.items);
+    return { mode, items: [...(loose.length ? [{ mode, items: loose }] : []), ...groups] };
+  }
+
   function renderSaved() {
     $("savedCount").textContent = savedFilters.length;
     $("savedBox").classList.toggle("hidden", savedFilters.length === 0);
@@ -380,7 +398,7 @@
     const items = importItems(sf.filters, skipped);
     if (items.length === 0) return setStatus($("savedMsg"), "None of these filters fit the columns of this file.", "err");
 
-    root = { mode: sf.mode === "or" ? "or" : "and", items };
+    root = toRoot(items, sf.mode);
     $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
     $("saveName").value = sf.name;
 
@@ -393,6 +411,7 @@
       if (keep.length) {
         selected.clear();
         keep.forEach(c => selected.add(c));
+        ensureLocked();
         renames = {};
         Object.entries(sf.renames || {}).forEach(([c, n]) => { if (selected.has(c) && n) renames[c] = n; });
         $("renameToggle").checked = Object.keys(renames).length > 0;
@@ -442,10 +461,12 @@
 
       const cb = document.createElement("input");
       cb.type = "checkbox";
-      cb.checked = selected.has(c);
+      cb.checked = selected.has(c) || LOCKED.has(c);
+      if (LOCKED.has(c)) cb.disabled = true;
       cb.onchange = () => { cb.checked ? selected.add(c) : selected.delete(c); refresh(); };
 
       label.append(cb, el("span", null, c));
+      if (LOCKED.has(c)) label.append(el("em", "tag", "required"));
       if (CALCULATED.has(c)) label.append(el("em", "tag", "calculated"));
       if ($("renameToggle").checked) {
         const rn = document.createElement("input");
@@ -481,7 +502,7 @@
   $("search").oninput = renderColumns;
   $("renameToggle").onchange = renderColumns;
   $("allBtn").onclick  = () => { columns.forEach(c => selected.add(c)); renderColumns(); };
-  $("noneBtn").onclick = () => { selected.clear(); renderColumns(); };
+  $("noneBtn").onclick = () => { selected.clear(); ensureLocked(); renderColumns(); };
 
   // ------------------------------------------------------------------ download
   $("downloadBtn").onclick = async () => {

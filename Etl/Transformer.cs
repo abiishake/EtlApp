@@ -7,7 +7,9 @@ public sealed record TransformResult(
     List<string> Columns,                       // final column names, in output order
     List<Dictionary<string, object?>> Rows,     // keyed by final column name
     Dictionary<string, string> Formats,         // column -> Excel number format
-    List<string> Notes);                        // human-readable log of what was done
+    List<string> Notes,                         // human-readable log of what was done
+    // calculated column -> (numerator column, denominator column); the Excel export writes these as live formulas
+    Dictionary<string, (string Numerator, string Denominator)>? Formulas = null);
 
 /// <summary>
 /// All ETL rules from the "Instructions For AI" sheet live here.
@@ -15,6 +17,9 @@ public sealed record TransformResult(
 /// </summary>
 public static class Transformer
 {
+    /// the identifier column (renamed from _uuid); always part of an export
+    public const string IdColumn = "Id";
+
     // ---------------------------------------------------------------- source column names
     const string ColToday        = "today";
     const string ColDob          = "Date Of Birth";
@@ -231,7 +236,13 @@ public static class Transformer
         if (hasRatioL) formats[OutRatioL] = "0.0000";
         if (hasRatioR) formats[OutRatioR] = "0.0000";
 
-        return new TransformResult(finalOrder, outRows, formats, notes);
+        // the 2D:4D ratios are exported as Excel formulas (index finger / ring finger); the values above are still
+        // computed so that filtering on them keeps working
+        var formulas = new Dictionary<string, (string Numerator, string Denominator)>();
+        if (hasRatioL) formulas[OutRatioL] = (Rename(cIndexL!), Rename(cRingL!));
+        if (hasRatioR) formulas[OutRatioR] = (Rename(cIndexR!), Rename(cRingR!));
+
+        return new TransformResult(finalOrder, outRows, formats, notes, formulas);
     }
 
     // ================================================================= helpers

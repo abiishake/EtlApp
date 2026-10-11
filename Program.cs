@@ -83,7 +83,7 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
         return Results.NotFound(new { error = "Session expired. Please upload the file again." });
 
     var chosen = new HashSet<string>(body.Columns ?? new List<string>());
-    var columns = data.Columns.Where(chosen.Contains).ToList();   // keep the standard column order
+    var columns = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();   // Id is always exported   // keep the standard column order
     if (columns.Count == 0)
         return Results.BadRequest(new { error = "Select at least one column." });
 

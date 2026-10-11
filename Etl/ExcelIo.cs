@@ -90,6 +90,15 @@ public static class ExcelIo
             cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#E8EEF7");
         }
 
+        // calculated columns that are written as Excel formulas (only when both input columns are in the export)
+        var position = new Dictionary<string, int>();
+        for (int c = 0; c < columns.Count; c++) position[columns[c]] = c;
+        var formulaCols = new (string Num, string Den)?[columns.Count];
+        for (int c = 0; c < columns.Count; c++)
+            if (data.Formulas != null && data.Formulas.TryGetValue(columns[c], out var f) &&
+                position.TryGetValue(f.Numerator, out var ni) && position.TryGetValue(f.Denominator, out var di))
+                formulaCols[c] = (XLHelper.GetColumnLetterFromNumber(ni + 1), XLHelper.GetColumnLetterFromNumber(di + 1));
+
         // body
         var widths = headers.Select(c => Math.Min(c.Length, 40)).ToArray();
         for (int r = 0; r < data.Rows.Count; r++)
@@ -97,6 +106,17 @@ public static class ExcelIo
             var row = data.Rows[r];
             for (int c = 0; c < columns.Count; c++)
             {
+                if (formulaCols[c] is { } fc)
+                {
+                    // numerator / denominator of the same row; blank when either is empty or the division is not possible
+                    int xr = r + 2;
+                    var fcell = ws.Cell(xr, c + 1);
+                    fcell.FormulaA1 = $"IF(OR({fc.Num}{xr}=\"\",{fc.Den}{xr}=\"\"),\"\",IFERROR({fc.Num}{xr}/{fc.Den}{xr},\"\"))";
+                    if (data.Formats.TryGetValue(columns[c], out var ffmt))
+                        fcell.Style.NumberFormat.Format = ffmt;
+                    widths[c] = Math.Max(widths[c], 10);
+                    continue;
+                }
                 if (!row.TryGetValue(columns[c], out var v) || v == null) continue;
                 var cell = ws.Cell(r + 2, c + 1);
                 switch (v)
