@@ -108,9 +108,7 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
     // optionally remember the filters under the downloaded file name (a failure here must not block the download)
     if (body.SaveFilters == true)
     {
-        var active = (body.Filters ?? new List<FilterSpec>())
-            .Where(f => !string.IsNullOrWhiteSpace(f.Value))
-            .Select(f => f with { Value = f.Value!.Trim() }).ToList();
+        var active = Filtering.Active(body.Filters);
         var savedOk = false;
         if (active.Count > 0)
         {

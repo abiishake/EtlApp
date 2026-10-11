@@ -3,3 +3,4 @@ bin/Debug/net8.0/DocumentFormat.OpenXml.dll
 /bin
 /obj
 /Properties
+data/etl.db

@@ -42,9 +42,14 @@
   .hidden { display:none !important; }
 
   /* filters */
-  .frow { display:grid; grid-template-columns:minmax(160px,1.4fr) 140px minmax(160px,1.2fr) auto; gap:8px; align-items:center; margin-bottom:4px; }
+  .frow { display:grid; grid-template-columns:minmax(160px,1.4fr) 190px minmax(160px,1.2fr) auto; gap:8px; align-items:center; margin-bottom:4px; }
   .frow .x { padding:6px 10px; }
   .fhint { grid-column:1 / -1; color:var(--muted); font-size:12px; margin:0 0 10px 2px; }
+  .grp { margin:6px 0; }
+  .grp.nested { border-left:3px solid var(--accent); padding:6px 0 2px 12px; margin:8px 0 8px 4px; }
+  .ghead { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .ghead .x { padding:5px 10px; }
+  .gempty { color:var(--muted); font-size:12px; margin:0 0 6px 2px; }
   .empty { color:var(--muted); font-size:13px; margin:0 0 8px; }
   @media (max-width:640px) { .frow { grid-template-columns:1fr 1fr; } }
 
@@ -89,17 +94,11 @@
       <div id="savedList"></div>
       <div id="savedMsg" class="status" style="margin-top:6px"></div>
     </details>
-    <div class="row" style="margin-bottom:10px">
-      <span class="opt">Match rows that satisfy</span>
-      <select id="filterMode">
-        <option value="and">ALL filters (AND)</option>
-        <option value="or">ANY filter (OR)</option>
-      </select>
-    </div>
     <p id="noFilters" class="empty">No filters: all rows will be exported.</p>
     <div id="filters"></div>
     <div class="row" style="margin-top:8px">
       <button id="addFilter">+ Add filter</button>
+      <button id="addGroup">+ Add group</button>
       <button id="clearFilters">Clear filters</button>
       <span id="matchCount" class="count"></span>
     </div>
@@ -135,7 +134,7 @@
   const CALCULATED = new Set(["Age", "Is Sample Twin", "Left Hand Ratio (2D:4D)", "Right Hand Ratio (2D:4D)"]);
   const OPS = {
     text:   [["contains", "Contains"], ["equals", "Equals"]],
-    number: [["gt", "Greater than"], ["lt", "Less than"], ["eq", "Equal"]]
+    number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"]]
   };
 
   let sessionId = null;
@@ -144,15 +143,26 @@
   let columns = [];          // final columns, in order
   const selected = new Set();
   let renames = {};          // original column name -> new header (export only)
-  let filters = [];          // [{column, op, value}]
-  let mode = "and";          // how filters combine: "and" | "or"
+  // filter tree: a group is {mode: "and"|"or", items: [...]}, a filter is {column, op, value}; groups nest freely
+  let root = { mode: "and", items: [] };
+  let dlSeq = 0;
   let matchCount = null, totalRows = 0, filterError = "";
   let savedFilters = [];     // filters remembered from earlier downloads (SQLite, server side)
-  const OP_TEXT = { contains: "contains", equals: "=", eq: "=", gt: ">", lt: "<" };
+  const OP_TEXT = { contains: "contains", equals: "=", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
-  const activeFilters = () => filters.filter(f => f.value !== "" && f.value != null);
+  // the tree without empty filters / empty groups (what is sent to the server)
+  const activeItems = items => {
+    const out = [];
+    for (const n of items) {
+      if (n.items) { const sub = activeItems(n.items); if (sub.length) out.push({ mode: n.mode, items: sub }); }
+      else if (n.value !== "" && n.value != null) out.push({ column: n.column, op: n.op, value: n.value });
+    }
+    return out;
+  };
+  const activeFilters = () => activeItems(root.items);
+  const flip = m => (m === "and" ? "or" : "and");
   const fmt = n => Number(n).toLocaleString();
 
   // ------------------------------------------------------------------ upload
@@ -181,9 +191,7 @@
       renames = {};
       $("renameToggle").checked = false;
       columns.forEach(c => selected.add(c));          // everything selected by default
-      filters = [];
-      mode = "and";
-      $("filterMode").value = "and";
+      root = { mode: "and", items: [] };
       matchCount = totalRows = data.rowCount;
       filterError = "";
 
@@ -208,13 +216,10 @@
   };
 
   // ------------------------------------------------------------------ filters
-  $("addFilter").onclick = () => {
-    const first = info[0];
-    filters.push({ column: first.name, op: OPS[first.type][0][0], value: "" });
-    renderFilters();
-  };
-  $("filterMode").onchange = () => { mode = $("filterMode").value; scheduleCount(); };
-  $("clearFilters").onclick = () => { filters = []; renderFilters(); scheduleCount(); };
+  const newFilter = () => { const first = info[0]; return { column: first.name, op: OPS[first.type][0][0], value: "" }; };
+  $("addFilter").onclick = () => { root.items.push(newFilter()); renderFilters(); };
+  $("addGroup").onclick = () => { root.items.push({ mode: flip(root.mode), items: [newFilter()] }); renderFilters(); };
+  $("clearFilters").onclick = () => { root.items = []; renderFilters(); scheduleCount(); };
 
   function makeSelect(options, current) {
     const s = document.createElement("select");
@@ -230,62 +235,86 @@
   function renderFilters() {
     const box = $("filters");
     box.replaceChildren();
-    $("noFilters").classList.toggle("hidden", filters.length > 0);
-
-    filters.forEach((f, i) => {
-      const ci = byName[f.column];
-      const row = el("div", "frow");
-
-      // column
-      const colSel = makeSelect(info.map(c => [c.name, c.type === "number" ? `${c.name}  (number)` : c.name]), f.column);
-      colSel.onchange = () => {
-        f.column = colSel.value;
-        f.op = OPS[byName[f.column].type][0][0];
-        f.value = "";
-        renderFilters(); scheduleCount();
-      };
-
-      // operator
-      const opSel = makeSelect(OPS[ci.type], f.op);
-      opSel.onchange = () => { f.op = opSel.value; f.value = ""; renderFilters(); scheduleCount(); };
-
-      // value
-      let valueCtl;
-      if (ci.type === "text" && f.op === "equals" && ci.values) {
-        valueCtl = makeSelect([["", "— choose a value —"], ...ci.values.map(v => [v.value, `${v.value}  (${fmt(v.count)})`])], f.value);
-        valueCtl.onchange = () => { f.value = valueCtl.value; scheduleCount(); };
-      } else {
-        valueCtl = document.createElement("input");
-        valueCtl.type = ci.type === "number" ? "number" : "text";
-        if (ci.type === "number") valueCtl.step = "any";
-        valueCtl.placeholder = ci.type === "number" ? "number" : "text";
-        valueCtl.value = f.value;
-        if (ci.values) {                                  // suggestions from the distinct values
-          const dl = document.createElement("datalist");
-          dl.id = "dl-" + i;
-          ci.values.forEach(v => { const o = document.createElement("option"); o.value = v.value; dl.append(o); });
-          valueCtl.setAttribute("list", dl.id);
-          row.append(dl);
-        }
-        valueCtl.oninput = () => { f.value = valueCtl.value.trim(); scheduleCount(); };
-      }
-
-      // remove
-      const rm = el("button", "x", "✕");
-      rm.title = "Remove filter";
-      rm.onclick = () => { filters.splice(i, 1); renderFilters(); scheduleCount(); };
-
-      // hint under the row: distinct values / range
-      let hint;
-      if (ci.type === "number")
-        hint = `${fmt(ci.distinctCount)} distinct values, range ${ci.min} to ${ci.max}`;
-      else
-        hint = ci.values ? `${fmt(ci.distinctCount)} distinct values` : `${fmt(ci.distinctCount)} distinct values (too many to list)`;
-
-      row.append(colSel, opSel, valueCtl, rm, el("div", "fhint", hint));
-      box.append(row);
-    });
+    $("noFilters").classList.toggle("hidden", root.items.length > 0);
+    if (root.items.length > 0) box.append(renderGroup(root, null));
     refresh();
+  }
+
+  // one AND/OR group: header (mode + group buttons) followed by its filters and nested groups
+  function renderGroup(g, parent) {
+    const box = el("div", "grp" + (parent ? " nested" : ""));
+    const head = el("div", "ghead");
+    head.append(el("span", "opt", parent ? "Match" : "Match rows that satisfy"));
+    const sel = makeSelect([["and", "ALL of these (AND)"], ["or", "ANY of these (OR)"]], g.mode);
+    sel.onchange = () => { g.mode = sel.value; scheduleCount(); };
+    head.append(sel);
+    if (parent) {
+      const addF = el("button", null, "+ Filter");
+      addF.onclick = () => { g.items.push(newFilter()); renderFilters(); };
+      const addG = el("button", null, "+ Group");
+      addG.onclick = () => { g.items.push({ mode: flip(g.mode), items: [newFilter()] }); renderFilters(); };
+      const rm = el("button", "x", "✕");
+      rm.title = "Remove group";
+      rm.onclick = () => { parent.items.splice(parent.items.indexOf(g), 1); renderFilters(); scheduleCount(); };
+      head.append(addF, addG, rm);
+    }
+    box.append(head);
+    g.items.forEach(n => box.append(n.items ? renderGroup(n, g) : renderFilter(n, g)));
+    return box;
+  }
+
+  function renderFilter(f, parent) {
+    const ci = byName[f.column];
+    const row = el("div", "frow");
+
+    // column
+    const colSel = makeSelect(info.map(c => [c.name, c.type === "number" ? `${c.name}  (number)` : c.name]), f.column);
+    colSel.onchange = () => {
+      f.column = colSel.value;
+      f.op = OPS[byName[f.column].type][0][0];
+      f.value = "";
+      renderFilters(); scheduleCount();
+    };
+
+    // operator
+    const opSel = makeSelect(OPS[ci.type], f.op);
+    opSel.onchange = () => { f.op = opSel.value; f.value = ""; renderFilters(); scheduleCount(); };
+
+    // value
+    let valueCtl;
+    if (ci.type === "text" && f.op === "equals" && ci.values) {
+      valueCtl = makeSelect([["", "— choose a value —"], ...ci.values.map(v => [v.value, `${v.value}  (${fmt(v.count)})`])], f.value);
+      valueCtl.onchange = () => { f.value = valueCtl.value; scheduleCount(); };
+    } else {
+      valueCtl = document.createElement("input");
+      valueCtl.type = ci.type === "number" ? "number" : "text";
+      if (ci.type === "number") valueCtl.step = "any";
+      valueCtl.placeholder = ci.type === "number" ? "number" : "text";
+      valueCtl.value = f.value;
+      if (ci.values) {                                  // suggestions from the distinct values
+        const dl = document.createElement("datalist");
+        dl.id = "dl-" + (dlSeq++);
+        ci.values.forEach(v => { const o = document.createElement("option"); o.value = v.value; dl.append(o); });
+        valueCtl.setAttribute("list", dl.id);
+        row.append(dl);
+      }
+      valueCtl.oninput = () => { f.value = valueCtl.value.trim(); scheduleCount(); };
+    }
+
+    // remove
+    const rm = el("button", "x", "✕");
+    rm.title = "Remove filter";
+    rm.onclick = () => { parent.items.splice(parent.items.indexOf(f), 1); renderFilters(); scheduleCount(); };
+
+    // hint under the row: distinct values / range
+    let hint;
+    if (ci.type === "number")
+      hint = `${fmt(ci.distinctCount)} distinct values, range ${ci.min} to ${ci.max}`;
+    else
+      hint = ci.values ? `${fmt(ci.distinctCount)} distinct values` : `${fmt(ci.distinctCount)} distinct values (too many to list)`;
+
+    row.append(colSel, opSel, valueCtl, rm, el("div", "fhint", hint));
+    return row;
   }
 
   // ------------------------------------------------------------------ saved filters
@@ -298,19 +327,39 @@
     renderSaved();
   }
 
+  // readable one-liner for a saved filter tree, e.g.  Age ≥ 18 AND (Gender = Male OR Gender = Other)
+  const summarize = (items, mode) => items
+    .map(n => n.items ? "(" + summarize(n.items, n.mode) + ")" : `${n.column} ${OP_TEXT[n.op] || n.op} ${n.value}`)
+    .join(mode === "or" ? "  OR  " : "  AND  ");
+
+  // rebuild a saved tree for the current file, dropping filters whose column is missing / no longer fits
+  function importItems(items, skipped) {
+    const out = [];
+    for (const n of items) {
+      if (n.items) {
+        const sub = importItems(n.items, skipped);
+        if (sub.length) out.push({ mode: n.mode === "or" ? "or" : "and", items: sub });
+      } else {
+        const ci = byName[n.column];
+        if (ci && OPS[ci.type].some(o => o[0] === n.op)) out.push({ column: n.column, op: n.op, value: n.value });
+        else skipped.push(n.column);
+      }
+    }
+    return out;
+  }
+
   function renderSaved() {
     $("savedCount").textContent = savedFilters.length;
     $("savedBox").classList.toggle("hidden", savedFilters.length === 0);
     $("savedList").replaceChildren(...savedFilters.map(sf => {
       const row = el("div", "saved");
       const meta = el("div", "meta");
-      const join = sf.mode === "or" ? "  OR  " : "  AND  ";
       meta.append(
         el("b", null, sf.name),
         el("small", null, "File: " + sf.fileName),
         ...(sf.columns ? [el("small", null,
           `Columns: ${sf.columns.length} selected` + (Object.keys(sf.renames || {}).length ? `, ${Object.keys(sf.renames).length} renamed` : ""))] : []),
-        el("small", null, sf.filters.map(f => `${f.column} ${OP_TEXT[f.op] || f.op} ${f.value}`).join(join)),
+        el("small", null, summarize(sf.filters, sf.mode)),
         el("small", null, "Saved " + new Date(sf.savedAt).toLocaleString()));
       const use = el("button", null, "Apply");
       use.onclick = () => applySaved(sf);
@@ -327,17 +376,11 @@
   }
 
   function applySaved(sf) {
-    const ok = [], skipped = [];
-    sf.filters.forEach(f => {
-      const ci = byName[f.column];
-      if (ci && OPS[ci.type].some(o => o[0] === f.op)) ok.push({ column: f.column, op: f.op, value: f.value });
-      else skipped.push(f.column);
-    });
-    if (ok.length === 0) return setStatus($("savedMsg"), "None of these filters fit the columns of this file.", "err");
+    const skipped = [];
+    const items = importItems(sf.filters, skipped);
+    if (items.length === 0) return setStatus($("savedMsg"), "None of these filters fit the columns of this file.", "err");
 
-    filters = ok;
-    mode = sf.mode === "or" ? "or" : "and";
-    $("filterMode").value = mode;
+    root = { mode: sf.mode === "or" ? "or" : "and", items };
     $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
     $("saveName").value = sf.name;
 
@@ -376,7 +419,7 @@
       const res = await fetch("/api/count", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sessionId, filters: activeFilters(), mode })
+        body: JSON.stringify({ id: sessionId, filters: activeFilters(), mode: root.mode })
       });
       const data = await res.json();
       if (mine !== reqNo) return;
@@ -453,7 +496,7 @@
           id: sessionId,
           columns: columns.filter(c => selected.has(c)),
           filters: activeFilters(),
-          mode,
+          mode: root.mode,
           fileName: $("fileName").value.trim(),
           saveFilters: wantSave,
           filterName: $("saveName").value.trim(),
