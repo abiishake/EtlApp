@@ -12,7 +12,7 @@ public sealed record ColumnInfo(
     double? Min,
     double? Max);
 
-/// <summary>Describes each column (type + distinct values) and applies row filters. Filters are AND-ed.</summary>
+/// <summary>Describes each column (type + distinct values) and applies row filters. Filters are AND-ed by default; mode "or" matches rows satisfying any filter.</summary>
 public static class Filtering
 {
     public const int MaxListedValues = 200;
@@ -54,7 +54,7 @@ public static class Filtering
 
     // ------------------------------------------------------------------ apply filters
     /// Empty-value filters are ignored. Throws ArgumentException for invalid filters.
-    public static List<Dictionary<string, object?>> Apply(TransformResult data, IEnumerable<FilterSpec>? filters)
+    public static List<Dictionary<string, object?>> Apply(TransformResult data, IEnumerable<FilterSpec>? filters, string? mode = null)
     {
         var active = (filters ?? Enumerable.Empty<FilterSpec>())
             .Where(f => !string.IsNullOrWhiteSpace(f.Value)).ToList();
@@ -90,7 +90,8 @@ public static class Filtering
                     throw new ArgumentException($"Filter '{f.Op}' is not valid for column '{col}'.");
             }
         }
-        return data.Rows.Where(r => predicates.All(p => p(r))).ToList();
+        bool any = string.Equals(mode, "or", StringComparison.OrdinalIgnoreCase);
+        return data.Rows.Where(r => any ? predicates.Any(p => p(r)) : predicates.All(p => p(r))).ToList();
     }
 
     // ------------------------------------------------------------------ helpers

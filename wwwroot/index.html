@@ -78,7 +78,14 @@
   </section>
 
   <section id="filterCard" class="card hidden">
-    <h2><span class="step">2.</span>Filter rows <span class="opt">(optional - all filters must match)</span></h2>
+    <h2><span class="step">2.</span>Filter rows <span class="opt">(optional)</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="opt">Match rows that satisfy</span>
+      <select id="filterMode">
+        <option value="and">ALL filters (AND)</option>
+        <option value="or">ANY filter (OR)</option>
+      </select>
+    </div>
     <p id="noFilters" class="empty">No filters: all rows will be exported.</p>
     <div id="filters"></div>
     <div class="row" style="margin-top:8px">
@@ -123,6 +130,7 @@
   const selected = new Set();
   let renames = {};          // original column name -> new header (export only)
   let filters = [];          // [{column, op, value}]
+  let mode = "and";          // how filters combine: "and" | "or"
   let matchCount = null, totalRows = 0, filterError = "";
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -157,6 +165,8 @@
       $("renameToggle").checked = false;
       columns.forEach(c => selected.add(c));          // everything selected by default
       filters = [];
+      mode = "and";
+      $("filterMode").value = "and";
       matchCount = totalRows = data.rowCount;
       filterError = "";
 
@@ -184,6 +194,7 @@
     filters.push({ column: first.name, op: OPS[first.type][0][0], value: "" });
     renderFilters();
   };
+  $("filterMode").onchange = () => { mode = $("filterMode").value; scheduleCount(); };
   $("clearFilters").onclick = () => { filters = []; renderFilters(); scheduleCount(); };
 
   function makeSelect(options, current) {
@@ -268,7 +279,7 @@
       const res = await fetch("/api/count", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: sessionId, filters: activeFilters() })
+        body: JSON.stringify({ id: sessionId, filters: activeFilters(), mode })
       });
       const data = await res.json();
       if (mine !== reqNo) return;
@@ -339,6 +350,7 @@
           id: sessionId,
           columns: columns.filter(c => selected.has(c)),
           filters: activeFilters(),
+          mode,
           renames: Object.fromEntries(Object.entries(renames).filter(([c]) => selected.has(c)))
         })
       });

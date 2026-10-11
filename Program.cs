@@ -65,7 +65,7 @@ app.MapPost("/api/count", (CountRequest body, SessionStore store) =>
 
     try
     {
-        var rows = Filtering.Apply(data, body.Filters);
+        var rows = Filtering.Apply(data, body.Filters, body.Mode);
         return Results.Ok(new { count = rows.Count, total = data.Rows.Count });
     }
     catch (ArgumentException ex)
@@ -87,7 +87,7 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
         return Results.BadRequest(new { error = "Select at least one column." });
 
     List<Dictionary<string, object?>> rows;
-    try { rows = Filtering.Apply(data, body.Filters); }
+    try { rows = Filtering.Apply(data, body.Filters, body.Mode); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 
     if (rows.Count == 0)
@@ -109,5 +109,5 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store) =>
 
 app.Run();
 
-record CountRequest(string? Id, List<FilterSpec>? Filters);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames);
+record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode);
