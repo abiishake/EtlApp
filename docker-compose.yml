@@ -7,5 +7,6 @@ services:
     restart: unless-stopped
     mem_limit: 256m        # hard caps so it can never starve the media server
     cpus: 0.5
+    user: "1000:1000"      # run as your Debian user (check with: id -u; id -g) so it can write to ./data
     volumes:
       - ./data:/data       # SQLite file (saved filters) lives here: ./data/etl.db  -> back up this folder
