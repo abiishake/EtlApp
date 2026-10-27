@@ -159,7 +159,7 @@ public static class Transformer
             foreach (var r in rows)
             {
                 var dob = AsDate(Get(r, cDob!));
-                var on  = cToday != null ? AsDate(Get(r, cToday)) : DateTime.Today;
+                var on  = DateTime.Today;
                 r[OutAge] = (dob, on) is ({ } d, { } o) ? YearsBetween(d, o) : null;
             }
             if (cToday == null) notes.Add("Age: no 'today' column found, used the current date.");
