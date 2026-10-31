@@ -76,6 +76,15 @@ app.MapPost("/api/count", (CountRequest body, SessionStore store) =>
     }
 });
 
+// 1b) Every cell the clean-up rules changed, original vs new (used by changes.html)
+app.MapGet("/api/changes/{id}", (string id, SessionStore store) =>
+{
+    var data = store.Get(id);
+    if (data == null)
+        return Results.NotFound(new { error = "This upload has expired. Please upload the file again." });
+    return Results.Ok(new { notes = data.Notes, changes = data.Changes ?? new List<CellChange>() });
+});
+
 // 2b) First few rows of the (filtered) data with the chosen columns, for the preview table
 app.MapPost("/api/preview", (PreviewRequest body, SessionStore store) =>
 {

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changed records – Research Form ETL</title>
+<style>
+  :root {
+    --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#667085; --line:#e3e6ec;
+    --accent:#2563eb; --ok:#16794a; --err:#b42318;
+    --old-bg:#fdecea; --old-fg:#9f1d14; --new-bg:#e6f4ea; --new-fg:#14633b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --card:#1b2029; --text:#e8ebf1; --muted:#9aa3b2; --line:#2a303c;
+            --accent:#4f8cff; --ok:#4cc38a; --err:#ff7b72;
+            --old-bg:#3a1d1b; --old-fg:#ffb4ab; --new-bg:#17321f; --new-fg:#8fe0ac; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  a { color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .summary { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+  .chip { border:1px solid var(--line); border-radius:999px; padding:4px 12px; cursor:pointer; background:transparent; font:inherit; color:var(--text); }
+  .chip.on { border-color:var(--accent); background:var(--accent); color:#fff; }
+  .chip b { margin-left:6px; }
+  .tools { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:12px; }
+  input[type=search] { padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font:inherit; min-width:260px; }
+  .muted { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); position:sticky; top:0; background:var(--card); }
+  tr.first td { border-top:2px solid var(--line); }
+  .old { background:var(--old-bg); color:var(--old-fg); text-decoration:line-through; border-radius:4px; padding:1px 6px; }
+  .new { background:var(--new-bg); color:var(--new-fg); border-radius:4px; padding:1px 6px; font-weight:600; }
+  .empty { color:var(--muted); font-style:italic; }
+  .arrow { color:var(--muted); padding:0 4px; }
+  .err { color:var(--err); }
+  ul { margin:6px 0 0; padding-left:18px; color:var(--muted); font-size:13px; }
+  .pager { display:flex; gap:8px; align-items:center; justify-content:flex-end; margin-top:12px; }
+  button { padding:6px 14px; border-radius:8px; border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; font:inherit; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+</style>
+</head>
+<body>
+<main>
+  <p><a href="/">← Back to the ETL</a></p>
+  <h1>Changed records</h1>
+  <p class="sub" id="sub">Every cell the clean-up changed, shown as original → new.</p>
+
+  <div id="msg" class="card hidden" hidden></div>
+
+  <section class="card" id="notesCard" hidden>
+    <strong>What was changed</strong>
+    <ul id="notes"></ul>
+  </section>
+
+  <section class="card" id="tableCard" hidden>
+    <div class="summary" id="rules"></div>
+    <div class="tools">
+      <input id="q" type="search" placeholder="Search row, Id, column or value…">
+      <span class="muted" id="count"></span>
+    </div>
+    <div style="overflow:auto">
+      <table>
+        <thead><tr><th>Excel row</th><th>Id</th><th>Rule</th><th>Column</th><th>Original</th><th></th><th>New</th></tr></thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <button id="prev">Previous</button>
+      <span class="muted" id="page"></span>
+      <button id="next">Next</button>
+    </div>
+  </section>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
+  const id = params.get("id"), file = params.get("file");
+  const PAGE = 200;
+  let all = [], rule = null, page = 0;
+
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function val(v, cls) { return v == null || v === "" ? el("span", "empty", "(empty)") : el("span", cls, v); }
+  function show(text, isErr) { const m = $("msg"); m.hidden = false; m.textContent = text; m.classList.toggle("err", !!isErr); }
+
+  function filtered() {
+    const q = $("q").value.trim().toLowerCase();
+    return all.filter(c => (!rule || c.rule === rule) &&
+      (!q || [c.rowNumber, c.recordId, c.column, c.original, c.updated, c.rule].some(x => x != null && String(x).toLowerCase().includes(q))));
+  }
+
+  function renderRules() {
+    const counts = {};
+    // count records (rows), not cells, per rule
+    const seen = new Set();
+    all.forEach(c => { const k = c.rule + "|" + c.rowNumber; if (!seen.has(k)) { seen.add(k); counts[c.rule] = (counts[c.rule] || 0) + 1; } });
+    const total = new Set(all.map(c => c.rowNumber)).size;
+    const mk = (label, n, r) => {
+      const b = el("button", "chip" + (rule === r ? " on" : ""), label);
+      b.append(el("b", null, n.toLocaleString()));
+      b.onclick = () => { rule = r; page = 0; renderRules(); render(); };
+      return b;
+    };
+    $("rules").replaceChildren(mk("All records", total, null), ...Object.keys(counts).map(r => mk(r, counts[r], r)));
+  }
+
+  function render() {
+    const list = filtered();
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
+    page = Math.min(page, pages - 1);
+    const slice = list.slice(page * PAGE, page * PAGE + PAGE);
+    const rows = [];
+    let prev = null;
+    for (const c of slice) {
+      const tr = el("tr", c.rowNumber !== prev ? "first" : null);
+      const same = c.rowNumber === prev;
+      tr.append(el("td", null, same ? "" : c.rowNumber), el("td", null, same ? "" : (c.recordId ?? "–")),
+        el("td", "muted", c.rule), el("td", null, c.column));
+      const o = el("td"); o.append(val(c.original, "old"));
+      const n = el("td"); n.append(val(c.updated, "new"));
+      tr.append(o, el("td", "arrow", "→"), n);
+      rows.push(tr);
+      prev = c.rowNumber;
+    }
+    if (!rows.length) { const tr = el("tr"); const td = el("td", "empty", "No changes match."); td.colSpan = 7; tr.append(td); rows.push(tr); }
+    $("body").replaceChildren(...rows);
+    const recs = new Set(list.map(c => c.rowNumber)).size;
+    $("count").textContent = `${recs.toLocaleString()} record(s), ${list.length.toLocaleString()} changed cell(s)`;
+    $("page").textContent = `Page ${page + 1} of ${pages}`;
+    $("prev").disabled = page === 0; $("next").disabled = page >= pages - 1;
+  }
+
+  $("q").oninput = () => { page = 0; render(); };
+  $("prev").onclick = () => { page--; render(); scrollTo(0, 0); };
+  $("next").onclick = () => { page++; render(); scrollTo(0, 0); };
+
+  (async () => {
+    if (file) $("sub").textContent = `Every cell the clean-up changed in “${file}”, shown as original → new.`;
+    if (!id) return show("No upload selected. Go back, upload a file, then open this page from “What was changed”.", true);
+    try {
+      const res = await fetch("/api/changes/" + encodeURIComponent(id));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return show(data.error || "Could not load the changes.", true);
+      if (data.notes?.length) { $("notes").replaceChildren(...data.notes.map(n => el("li", null, n))); $("notesCard").hidden = false; }
+      all = (data.changes || []).sort((a, b) => a.rowNumber - b.rowNumber);
+      if (!all.length) return show("No records were changed by the clean-up rules. Calculated columns (Age, Is Sample Twin, hand ratios) are added to every row and are not listed here.");
+      $("tableCard").hidden = false;
+      renderRules(); render();
+    } catch { show("Could not reach the server.", true); }
+  })();
+</script>
+</body>
+</html>

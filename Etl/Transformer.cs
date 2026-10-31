@@ -9,7 +9,12 @@ public sealed record TransformResult(
     Dictionary<string, string> Formats,         // column -> Excel number format
     List<string> Notes,                         // human-readable log of what was done
     // calculated column -> (numerator column, denominator column); the Excel export writes these as live formulas
-    Dictionary<string, (string Numerator, string Denominator)>? Formulas = null);
+    Dictionary<string, (string Numerator, string Denominator)>? Formulas = null,
+    // every individual cell that the clean-up rules changed (original vs new), for the "changes" page
+    List<CellChange>? Changes = null);
+
+/// <summary>One cell changed by a clean-up rule. RowNumber is the row in the uploaded Excel sheet (header = row 1).</summary>
+public sealed record CellChange(int RowNumber, string? RecordId, string Rule, string Column, string? Original, string? Updated);
 
 /// <summary>
 /// All ETL rules from the "Instructions For AI" sheet live here.
@@ -92,11 +97,18 @@ public static class Transformer
     {
         var notes = new List<string>();
         var rows  = inputRows.Select(r => new Dictionary<string, object?>(r)).ToList();
+        var changes = new List<CellChange>();
 
         // tolerant header lookup (ignores case / extra spaces)
         var lookup = new Dictionary<string, string>();
         foreach (var h in headers) lookup.TryAdd(Norm(h), h);
         string? Col(string expected) => lookup.TryGetValue(Norm(expected), out var a) ? a : null;
+
+        var cUuid = Col("_uuid");
+        void Track(int i, string rule, string column, object? before, object? after) =>
+            changes.Add(new CellChange(i + 2, cUuid == null ? null : Text(rows[i], cUuid), rule,
+                Renames.TryGetValue(column, out var rn) ? rn : column,
+                Show(before), Show(after)));
 
         // ---------------------------------------------------- 1. Caste: move 'NT' from the "other" column
         var cCaste = Col(ColCaste);
@@ -104,10 +116,13 @@ public static class Transformer
         if (cCaste != null && cOtherCaste != null)
         {
             int n = 0;
-            foreach (var r in rows)
+            for (int i = 0; i < rows.Count; i++)
             {
+                var r = rows[i];
                 if (Text(r, cOtherCaste) is { } t && t.Equals("NT", StringComparison.OrdinalIgnoreCase))
                 {
+                    Track(i, "Caste: 'NT' moved into Caste", cCaste, Get(r, cCaste), "NT");
+                    Track(i, "Caste: 'NT' moved into Caste", cOtherCaste, Get(r, cOtherCaste), null);
                     r[cCaste] = "NT";
                     r[cOtherCaste] = null;
                     n++;
@@ -122,11 +137,14 @@ public static class Transformer
         if (cEth != null && cOtherEth != null)
         {
             int n = 0;
-            foreach (var r in rows)
+            for (int i = 0; i < rows.Count; i++)
             {
+                var r = rows[i];
                 var t = Text(r, cOtherEth);
                 if (t != null && OtherEthnicityMap.TryGetValue(t, out var mapped))
                 {
+                    Track(i, "Ethnicity: 'other' value mapped", cEth, Get(r, cEth), mapped);
+                    Track(i, "Ethnicity: 'other' value mapped", cOtherEth, Get(r, cOtherEth), null);
                     r[cEth] = mapped;
                     r[cOtherEth] = null;
                     n++;
@@ -140,12 +158,17 @@ public static class Transformer
         if (cDisease != null)
         {
             int changed = 0;
-            foreach (var r in rows)
+            for (int i = 0; i < rows.Count; i++)
             {
+                var r = rows[i];
                 var t = Text(r, cDisease);
                 if (t == null) continue;
                 var cat = ClassifyDisease(t);
-                if (cat != null && cat != t) { r[cDisease] = cat; changed++; }
+                if (cat != null && cat != t)
+                {
+                    Track(i, "Other disease/symptoms: classified", cDisease, Get(r, cDisease), cat);
+                    r[cDisease] = cat; changed++;
+                }
             }
             notes.Add($"Other disease/symptoms: {changed} value(s) classified into a standard disease; the rest kept as typed.");
         }
@@ -242,7 +265,7 @@ public static class Transformer
         if (hasRatioL) formulas[OutRatioL] = (Rename(cIndexL!), Rename(cRingL!));
         if (hasRatioR) formulas[OutRatioR] = (Rename(cIndexR!), Rename(cRingR!));
 
-        return new TransformResult(finalOrder, outRows, formats, notes, formulas);
+        return new TransformResult(finalOrder, outRows, formats, notes, formulas, changes);
     }
 
     // ================================================================= helpers
@@ -327,6 +350,14 @@ public static class Transformer
         if (n is null || d is null || d == 0) return null;
         return Math.Round(n.Value / d.Value, 4, MidpointRounding.AwayFromZero);
     }
+
+    static string? Show(object? v) => v switch
+    {
+        null => null,
+        DateTime d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        string s => s,
+        var x => Convert.ToString(x, CultureInfo.InvariantCulture)
+    };
 
     static string Norm(string s) => Regex.Replace(s.Trim(), @"\s+", " ").ToLowerInvariant();
 }

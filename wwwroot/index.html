@@ -145,7 +145,7 @@
     </div>
     <div id="fileInfo" class="fileinfo"></div>
     <div id="status" class="status" role="status" aria-live="polite"></div>
-    <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul></details>
+    <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul><p style="margin:8px 0 0"><a id="changesLink" href="#" target="_blank" rel="noopener">See every changed record, original vs new →</a></p></details>
   </section>
 
   <section id="sheetCard" class="card hidden">
@@ -315,6 +315,7 @@
 
       $("notesList").replaceChildren(...data.notes.map(n => el("li", null, n)));
       $("notes").classList.toggle("hidden", data.notes.length === 0);
+      $("changesLink").href = "changes.html?id=" + encodeURIComponent(data.id) + "&file=" + encodeURIComponent(f.name);
 
       $("search").value = "";
       setStatus($("savedMsg"), "");
