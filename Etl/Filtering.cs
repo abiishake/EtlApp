@@ -106,10 +106,16 @@ public static class Filtering
             case "contains" when !isNumber:
                 return r => Shown(r, col)?.Contains(val, StringComparison.OrdinalIgnoreCase) == true;
 
+            case "notContains" when !isNumber:
+                return r => Shown(r, col)?.Contains(val, StringComparison.OrdinalIgnoreCase) != true;
+
             case "equals" when !isNumber:
                 return r => string.Equals(Shown(r, col)?.Trim(), val, StringComparison.OrdinalIgnoreCase);
 
-            case "gt" or "gte" or "lt" or "lte" or "eq" when isNumber:
+            case "notEquals" when !isNumber:
+                return r => !string.Equals(Shown(r, col)?.Trim(), val, StringComparison.OrdinalIgnoreCase);
+
+            case "gt" or "gte" or "lt" or "lte" or "eq" or "notEquals" when isNumber:
                 if (!double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var n))
                     throw new ArgumentException($"'{val}' is not a number (column '{col}').");
                 var op = f.Op;
@@ -119,6 +125,7 @@ public static class Filtering
                     "gte" => x >= n,
                     "lt"  => x < n,
                     "lte" => x <= n,
+                    "notEquals" => Math.Abs(x - n) >= 1e-9,
                     _     => Math.Abs(x - n) < 1e-9
                 };
 

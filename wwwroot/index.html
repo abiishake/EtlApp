@@ -150,8 +150,8 @@
   const CALCULATED = new Set(["Age", "Is Sample Twin", "Left Hand Ratio (2D:4D)", "Right Hand Ratio (2D:4D)"]);
   const LOCKED = new Set(["Id"]);       // columns that are always exported (cannot be unselected)
   const OPS = {
-    text:   [["contains", "Contains"], ["equals", "Equals"]],
-    number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"]]
+    text:   [["contains", "Contains"], ["notContains", "Not Contains"], ["equals", "Equals"], ["notEquals", "Not Equals"]],
+    number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"], ["notEquals", "Not Equals"]]
   };
 
   let sessionId = null;
@@ -168,7 +168,7 @@
   let outputSheets = [];
   let activeSheetIndex = 0;
   let restoringSheet = false;
-  const OP_TEXT = { contains: "contains", equals: "=", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
+  const OP_TEXT = { contains: "contains", notContains: "does not contain", equals: "=", notEquals: "≠", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
@@ -405,7 +405,7 @@
 
     // value
     let valueCtl;
-    if (ci.type === "text" && f.op === "equals" && ci.values) {
+    if (ci.type === "text" && (f.op === "equals" || f.op === "notEquals") && ci.values) {
       valueCtl = makeSelect([["", "— choose a value —"], ...ci.values.map(v => [v.value, `${v.value}  (${fmt(v.count)})`])], f.value);
       valueCtl.onchange = () => { f.value = valueCtl.value; scheduleCount(); };
     } else {
