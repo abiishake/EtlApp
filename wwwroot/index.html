@@ -71,7 +71,13 @@
   .saved .meta small { display:block; color:var(--muted); }
   #savedList { max-height:220px; overflow:auto; margin-top:6px; }
   .dl { margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-.sheet-list{display:flex;flex-direction:column;gap:8px}.sheet-list>.row{justify-content:flex-start;border:1px solid var(--border,#ddd);border-radius:8px;padding:8px}.sheet-list .sheet-name{font-weight:600;min-width:110px}
+.sheet-list{display:flex;flex-direction:column;gap:8px}.sheet-list>.row{justify-content:flex-start;border:1px solid var(--line);border-radius:8px;padding:8px}.sheet-list .sheet-name{font-weight:600;min-width:110px}
+  .dl { position:sticky; bottom:0; z-index:5; background:var(--card); padding:12px 0 4px; border-top:1px solid var(--line); }
+  .badge { font-size:12px; font-weight:500; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:1px 10px; margin-left:8px; white-space:nowrap; }
+  .dropping { outline:2px dashed var(--accent); outline-offset:-6px; }
+  .fileinfo { color:var(--muted); font-size:13px; margin-top:6px; }
+  .help { color:var(--muted); font-size:13px; margin:0 0 10px; }
+  button.danger:hover:not(:disabled) { border-color:var(--err); color:var(--err); }
 </style>
 </head>
 <body>
@@ -81,20 +87,25 @@
 
   <section class="card">
     <h2><span class="step">1.</span>Upload Excel file</h2>
+    <p class="help">Choose the research-form .xlsx (max 50 MB), or drag &amp; drop it anywhere on this page.</p>
     <div class="row">
       <input id="file" type="file" accept=".xlsx">
       <button id="uploadBtn" class="primary">Upload &amp; transform</button>
     </div>
-    <div id="status" class="status"></div>
+    <div id="fileInfo" class="fileinfo"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
     <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul></details>
   </section>
 
   <section id="sheetCard" class="card hidden">
     <h2>Output workbook</h2>
+    <p class="help">Each sheet in the downloaded workbook has its own filters and columns. Click “Edit settings” on a sheet, then use steps 2 and 3 below.</p>
     <div class="row" style="margin-bottom:10px">
       <strong>Saved Sheets</strong>
       <select id="workflowList" aria-label="Saved sheets"><option value="">Select saved sheets…</option></select>
       <button id="loadWorkflowBtn">Load</button>
+      <button id="saveWorkflowBtn" title="Remember the current sheets, filters and columns in this browser">Save current setup</button>
+      <button id="deleteWorkflowBtn" class="danger">Delete</button>
     </div>
     <div style="margin:10px 0"><button id="addSheetBtn">+ Add sheet</button></div>
     <div id="sheetTabs" class="sheet-list"></div><div id="workflowStatus" class="status"></div>
@@ -102,7 +113,7 @@
 
   <section id="filterCard" class="card hidden">
     <div class="row" style="align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-      <h2 style="margin:0"><span class="step">2.</span>Filter rows <span class="opt">(optional)</span></h2>
+      <h2 style="margin:0"><span class="step">2.</span>Filter rows <span class="opt">(optional)</span><span class="badge editing-badge"></span></h2>
       <div class="row" style="align-items:center;gap:8px">
         <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
         <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (required)" aria-label="Filter name" style="width:220px">
@@ -124,7 +135,7 @@
   </section>
 
   <section id="pick" class="card hidden">
-    <h2><span class="step">3.</span>Choose columns for the export</h2>
+    <h2><span class="step">3.</span>Choose columns for the export<span class="badge editing-badge"></span></h2>
     <div class="row">
       <input id="search" type="search" placeholder="Filter columns…">
       <button id="allBtn">Select all</button>
@@ -135,11 +146,11 @@
     <div id="cols"></div>
 
     <div id="dl" class="dl hidden">
-      <span class="opt">File name</span>
+      <span class="opt">Workbook file name</span>
       <input type="text" id="fileName" maxlength="100" placeholder="Research_Form_Transformed" style="width:260px">
       <span class="opt">.xlsx</span>
       <button id="downloadBtn" class="primary">Download Excel</button>
-      <span id="dlStatus" class="status" style="margin:0"></span>
+      <span id="dlStatus" class="status" style="margin:0" role="status" aria-live="polite"></span>
     </div>
   </section>
 </main>
@@ -184,11 +195,18 @@
   const activeFilters = () => activeItems(root.items);
   const ensureLocked = () => LOCKED.forEach(c => { if (columns.includes(c)) selected.add(c); });
   const fmt = n => Number(n).toLocaleString();
+  const MAX_UPLOAD = 50 * 1024 * 1024;                       // same limit as the server
+  const readJson = async res => { try { return await res.json(); } catch { return {}; } };   // error pages (e.g. 413) are not JSON
+  const safeName = v => { if (!v) return "transformed.xlsx"; try { return decodeURIComponent(v); } catch { return v; } };   // "50%.xlsx" must not throw
 
   // ------------------------------------------------------------------ upload
   $("uploadBtn").onclick = async () => {
     const f = $("file").files[0];
     if (!f) return setStatus($("status"), "Choose an .xlsx file first.", "err");
+    if (!/\.xlsx$/i.test(f.name)) return setStatus($("status"), "Only .xlsx files are supported.", "err");
+    if (f.size > MAX_UPLOAD) return setStatus($("status"), `That file is ${(f.size / 1048576).toFixed(1)} MB; the limit is 50 MB.`, "err");
+    if (sessionId && (outputSheets.length > 1 || activeFilters().length > 0) &&
+        !confirm("Uploading a new file resets your current sheets and filters. Continue?")) return;
 
     $("uploadBtn").disabled = true;
     $("pick").classList.add("hidden");
@@ -199,9 +217,11 @@
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
+      let res;
+      try { res = await fetch("/api/upload", { method: "POST", body: fd }); }
+      catch { throw new Error("Could not reach the server. Check the connection and try again."); }
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || (res.status === 413 ? "The file is too large (limit 50 MB)." : `Upload failed (HTTP ${res.status}).`));
 
       sessionId = data.id;
       info = data.columnInfo;
@@ -210,12 +230,14 @@
       selected.clear();
       renames = {};
       $("renameToggle").checked = false;
+      $("saveFilters").checked = false; $("saveName").value = "";
       columns.forEach(c => selected.add(c));          // everything selected by default
       root = { mode: "and", items: [] };
       outputSheets = [{ name: "Transformed Data", state: null }];
       activeSheetIndex = 0;
       $("fileName").value = f.name.replace(/\.xlsx$/i, "") + "_Transformed";
       $("sheetCard").classList.remove("hidden");
+      setStatus($("workflowStatus"), "");
       renderSheetTabs();
       matchCount = totalRows = data.rowCount;
       filterError = "";
@@ -244,7 +266,7 @@
     if (!outputSheets.length || activeSheetIndex < 0 || restoringSheet) return;
     outputSheets[activeSheetIndex].state = {
       root: JSON.parse(JSON.stringify(root)), selected: [...selected], renames: { ...renames },
-      renameEnabled: $("renameToggle").checked, fileName: $("fileName").value,
+      renameEnabled: $("renameToggle").checked,
       saveFilters: $("saveFilters").checked, saveName: $("saveName").value
     };
   }
@@ -254,18 +276,27 @@
     const sh = outputSheets[index];
     restoringSheet = true;
     const st = sh.state;
-    root = st ? JSON.parse(JSON.stringify(st.root)) : { mode: "and", items: [] };
+    root = st ? cleanRoot(st.root, []) : { mode: "and", items: [] };   // never restore filters on columns this file does not have
     selected.clear(); (st?.selected || columns).forEach(c => { if (columns.includes(c)) selected.add(c); }); ensureLocked();
     renames = st ? { ...st.renames } : {};
     $("renameToggle").checked = st?.renameEnabled || false;
-    $("fileName").value = st?.fileName || "";
     $("saveFilters").checked = st?.saveFilters || false;
     $("saveName").value = st?.saveName || "";
     $("search").value = "";
     restoringSheet = false;
     renderSheetTabs(); renderFilters(); renderColumns(); scheduleCount();
   }
+  // saved filters may refer to columns that are missing from the current file: drop those instead of crashing the page
+  function cleanRoot(r, skipped) {
+    const src = r || { mode: "and", items: [] };
+    return { mode: src.mode === "or" ? "or" : "and", items: importItems(src.items || [], skipped) };
+  }
+  function updateBadges() {
+    const name = outputSheets[activeSheetIndex]?.name;
+    document.querySelectorAll(".editing-badge").forEach(b => { b.textContent = name ? `Editing sheet: ${name}` : ""; b.classList.toggle("hidden", !name); });
+  }
   function renderSheetTabs() {
+    updateBadges();
     const box = $("sheetTabs"); box.replaceChildren();
     outputSheets.forEach((sh, i) => {
       const wrap = el("div", "row");
@@ -314,17 +345,35 @@
     const workflow = { name, fileName: $("fileName").value, sheets: outputSheets.map(x => ({ name: x.name, state: x.state })) };
     const i = saved.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
     if (i >= 0) saved[i] = workflow; else saved.push(workflow);
-    localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); refreshWorkflowList(); $("workflowList").value = name;
+    try { localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); } catch { /* storage full / blocked: the download must still work */ }
+    refreshWorkflowList(); $("workflowList").value = name;
     return name;
   }
   $("loadWorkflowBtn").onclick = () => {
-    const name = $("workflowList").value; if (!name) return;
+    const name = $("workflowList").value;
+    if (!name) return setStatus($("workflowStatus"), "Choose a saved setup from the list first.", "err");
     const workflow = readWorkflows().find(x => x.name === name); if (!workflow) return;
     if (workflow.fileName) $("fileName").value = workflow.fileName;
-    outputSheets = (workflow.sheets || []).map(x => ({ name: x.name, state: x.state }));
+    const skipped = [];
+    outputSheets = (workflow.sheets || []).map(x => ({ name: x.name, state: x.state ? { ...x.state, root: cleanRoot(x.state.root, skipped) } : null }));
     if (!outputSheets.length) outputSheets = [{ name: "Transformed Data", state: null }];
     activeSheetIndex = -1; restoreSheet(0);
-    setStatus($("workflowStatus"), `Loaded saved sheets “${name}”. Filters and columns have been restored.`, "ok");
+    const gone = [...new Set(skipped)];
+    setStatus($("workflowStatus"), gone.length
+      ? `Loaded “${name}”, but skipped filters on columns that are missing or no longer fit in this file: ${gone.join(", ")}.`
+      : `Loaded saved sheets “${name}”. Filters and columns have been restored.`, gone.length ? "err" : "ok");
+  };
+  $("saveWorkflowBtn").onclick = () => {
+    const name = saveCurrentWorkflow();
+    setStatus($("workflowStatus"), `Saved the current sheets as “${name}” (stored in this browser).`, "ok");
+  };
+  $("deleteWorkflowBtn").onclick = () => {
+    const name = $("workflowList").value;
+    if (!name) return setStatus($("workflowStatus"), "Choose a saved setup to delete.", "err");
+    if (!confirm(`Delete the saved sheet setup "${name}"?`)) return;
+    try { localStorage.setItem(WORKFLOW_KEY, JSON.stringify(readWorkflows().filter(x => x.name !== name))); } catch { }
+    refreshWorkflowList();
+    setStatus($("workflowStatus"), `Deleted “${name}”.`, "ok");
   };
   refreshWorkflowList();
 
@@ -486,7 +535,7 @@
       const meta = el("div", "meta");
       meta.append(
         el("b", null, sf.name),
-        el("small", null, "File: " + sf.fileName),
+        el("small", null, "Used for: " + sf.fileName),
         ...(sf.columns ? [el("small", null,
           `Columns: ${sf.columns.length} selected` + (Object.keys(sf.renames || {}).length ? `, ${Object.keys(sf.renames).length} renamed` : ""))] : []),
         el("small", null, summarize(sf.filters, sf.mode)),
@@ -497,7 +546,10 @@
       del.title = "Delete saved filters";
       del.onclick = async () => {
         if (!confirm(`Delete the saved filter "${sf.name}"?`)) return;
-        await fetch("/api/saved-filters/" + sf.id, { method: "DELETE" });
+        try {
+          const r = await fetch("/api/saved-filters/" + sf.id, { method: "DELETE" });
+          if (!r.ok && r.status !== 404) throw new Error();
+        } catch { return setStatus($("savedMsg"), "Could not delete the saved filter. Please try again.", "err"); }
         loadSaved();
       };
       row.append(meta, use, del);
@@ -511,7 +563,8 @@
     if (items.length === 0) return setStatus($("savedMsg"), "None of these filters fit the columns of this file.", "err");
 
     root = toRoot(items, sf.mode);
-    $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
+    // saved entries remember a sheet / file label, not the workbook name: only fill the name in when it is empty
+    if (!$("fileName").value.trim()) $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
     $("saveFilters").checked = true;
     $("saveName").value = sf.name;
 
@@ -595,6 +648,7 @@
   }
 
   function refresh() {
+    if (!restoringSheet && activeFilters().length === 0 && $("saveFilters").checked) $("saveFilters").checked = false;   // nothing to remember
     if (outputSheets.length && !restoringSheet) captureSheet();
     $("count").textContent = `${selected.size} of ${columns.length} selected`;
     $("filterErr").textContent = filterError;
@@ -636,7 +690,7 @@
       const sheets = outputSheets.map(sh => {
         const st = sh.state || { root: { mode: "and", items: [] }, selected: columns, renames: {} };
         const rootState = st.root || { mode: "and", items: [] };
-        return { sheetName: sh.name, columns: st.selected || columns, filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renames || {}, saveFilters: !!st.saveFilters, filterName: (st.saveName || "").trim() };
+        return { sheetName: sh.name, columns: st.selected || columns, filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renameEnabled === false ? {} : (st.renames || {}), saveFilters: !!st.saveFilters && cleanItems(rootState.items).length > 0, filterName: (st.saveName || "").trim() };
       });
       const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
       if (missingFilterName) {
@@ -649,19 +703,46 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: sessionId, fileName: $("fileName").value.trim(), sheets })
       });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error || "Export failed."); }
+      if (!res.ok) {
+        const d = await readJson(res);
+        throw new Error(res.status === 404
+          ? "Your uploaded file has expired (uploads are kept in memory, 1 hour after last use). Upload it again, then pick this setup under “Saved sheets”."
+          : (d.error || d.detail || `Export failed (HTTP ${res.status}).`));
+      }
       const blob = await res.blob(), url = URL.createObjectURL(blob), a = el("a");
       const cd = res.headers.get("Content-Disposition") || "";
       const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
-      a.href = url; a.download = m ? decodeURIComponent(m[1]) : "transformed.xlsx"; document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      a.href = url; a.download = safeName(m ? m[1] : ""); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 10000);
       refresh(); loadSaved(); refreshWorkflowList();
-      setStatus($("dlStatus"), `Downloaded all sheets. Workflow “${workflowName}” saved with each sheet’s filters and columns.`, "ok");
+      const failed = parseInt(res.headers.get("X-Filters-Save-Failed") || "0", 10);
+      setStatus($("dlStatus"), failed > 0
+        ? `Downloaded, but ${failed} filter(s) could not be remembered on the server. The setup “${workflowName}” is still saved in this browser.`
+        : `Downloaded all sheets. Setup “${workflowName}” saved with each sheet’s filters and columns.`, failed > 0 ? "err" : "ok");
     } catch (e) {
       setStatus($("dlStatus"), e.message, "err");
     } finally {
       $("downloadBtn").disabled = matchCount == null || matchCount === 0;
     }
   };
+
+  // ------------------------------------------------------------------ file picking: size info + drag & drop
+  const showFileInfo = () => {
+    const f = $("file").files[0];
+    $("fileInfo").textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : "";
+  };
+  $("file").onchange = showFileInfo;
+  const dropCard = document.querySelector("section.card");
+  const hasFiles = e => !!e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+  ["dragenter", "dragover"].forEach(t => window.addEventListener(t, e => { if (!hasFiles(e)) return; e.preventDefault(); dropCard.classList.add("dropping"); }));
+  window.addEventListener("dragleave", e => { if (!e.relatedTarget) dropCard.classList.remove("dropping"); });
+  window.addEventListener("drop", e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dropCard.classList.remove("dropping");
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    const dt = new DataTransfer(); dt.items.add(f); $("file").files = dt.files;
+    showFileInfo();
+    if (!$("uploadBtn").disabled) $("uploadBtn").click();
+  });
 })();
 </script>
 </body>

@@ -150,6 +150,8 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
             return Results.BadRequest(new { error = $"The filter name '{duplicateFilterName.Key}' is used by more than one sheet. Give each saved filter a unique name." });
 
         var exports = new List<ExcelIo.SheetExport>();
+        // filters are remembered only after the workbook was built successfully (a failed export must not leave half-saved filters)
+        var pendingSaves = new List<(string Name, string Label, string Mode, List<FilterSpec> Filters, List<string> Columns, Dictionary<string, string> Renames)>();
         foreach (var sheet in body.Sheets)
         {
             var chosen = new HashSet<string>(sheet.Columns ?? new List<string>());
@@ -176,12 +178,18 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
                     var keptRenames = new Dictionary<string, string>();
                     for (var i = 0; i < cols.Count; i++)
                         if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
-                    try { saved.Save(filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames); }
-                    catch (Exception ex) { log.LogWarning(ex, "Could not save filters for sheet {SheetName}", sheet.SheetName); }
+                    pendingSaves.Add((filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames));
                 }
             }
         }
         var bytes = ExcelIo.WriteMultiple(exports);
+        var failedSaves = 0;
+        foreach (var ps in pendingSaves)
+        {
+            try { saved.Save(ps.Name, ps.Label, ps.Mode, ps.Filters, ps.Columns, ps.Renames); }
+            catch (Exception ex) { failedSaves++; log.LogWarning(ex, "Could not save filters '{FilterName}'", ps.Name); }
+        }
+        if (pendingSaves.Count > 0) http.Response.Headers["X-Filters-Save-Failed"] = failedSaves.ToString();   // the page shows a warning when > 0
         var baseName = SanitizeFileName(body.FileName);
         var fileName = baseName != null ? $"{baseName}.xlsx" : $"Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
         return Results.File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);

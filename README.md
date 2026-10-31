@@ -11,11 +11,11 @@ Open http://localhost:8085 (or http://<server-ip>:8085 from another device).
 
     docker compose down      # stop it whenever you don't need it
 
-Uploaded data is kept in memory for 1 hour, then discarded.
+Uploaded data is kept in memory for 1 hour after you last use it, then discarded.
 The only thing stored on disk is the "saved filters" list (SQLite file `./data/etl.db`, mounted into the container at `/data`).
-First run on the server (the container runs as a non-root user):
+First run on the server (`docker-compose.yml` runs the container as user `1000:1000`, so the data folder must belong to that user; if your Debian user is different, change `user:` in the compose file and the numbers below to match):
 
-    mkdir -p data && sudo chown 1654:1654 data
+    mkdir -p data && sudo chown 1000:1000 data
 
 Backup: stop the container and copy `data/etl.db`, or run `sqlite3 data/etl.db ".backup 'etl-backup.db'"` while it is running.
 There is no login, so keep it on your LAN.

@@ -282,13 +282,24 @@ public static class Transformer
         var v => Convert.ToString(v, CultureInfo.InvariantCulture)
     };
 
+    static readonly string[] DayFirstFormats = { "dd/MM/yyyy", "d/M/yyyy", "dd-MM-yyyy", "d-M-yyyy", "dd.MM.yyyy", "d.M.yyyy" };
+
     static DateTime? AsDate(object? v) => v switch
     {
         DateTime d => d,
-        double n   => DateTime.FromOADate(n),
+        double n   => FromSerial(n),
         string s when DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => d,
+        // "25/12/1990" style text (day first) is not understood by the invariant parser above
+        string s when DateTime.TryParseExact(s.Trim(), DayFirstFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => d,
         _ => null
     };
+
+    /// an Excel serial number outside the valid date range (e.g. a phone number typed in the DOB column) becomes "no date" instead of failing the whole upload
+    static DateTime? FromSerial(double n)
+    {
+        try { return DateTime.FromOADate(n); }
+        catch (ArgumentException) { return null; }
+    }
 
     static double? AsNumber(object? v) => v switch
     {

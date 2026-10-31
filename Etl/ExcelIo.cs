@@ -77,10 +77,16 @@ public static class ExcelIo
 
     public static byte[] Write(TransformResult data, IReadOnlyList<string> columns, IReadOnlyList<string>? headers = null)
     {
-        headers ??= columns;   // header text shown in row 1 (defaults to the column names)
         using var wb = new XLWorkbook();
-        var ws = wb.Worksheets.Add("Transformed Data");
+        FillSheet(wb.Worksheets.Add("Transformed Data"), data, columns, headers ?? columns);
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        return ms.ToArray();
+    }
 
+    /// writes header + rows + formulas + widths + freeze pane + auto-filter into one worksheet (shared by the single- and multi-sheet exports)
+    static void FillSheet(IXLWorksheet ws, TransformResult data, IReadOnlyList<string> columns, IReadOnlyList<string> headers)
+    {
         // header
         for (int c = 0; c < columns.Count; c++)
         {
@@ -149,11 +155,8 @@ public static class ExcelIo
         ws.SheetView.FreezeRows(1);
         if (columns.Count > 0 && data.Rows.Count > 0)
             ws.Range(1, 1, data.Rows.Count + 1, columns.Count).SetAutoFilter();
-
-        using var ms = new MemoryStream();
-        wb.SaveAs(ms);
-        return ms.ToArray();
     }
+
     public sealed record SheetExport(string Name, TransformResult Data, IReadOnlyList<string> Columns, IReadOnlyList<string> Headers);
 
     public static byte[] WriteMultiple(IReadOnlyList<SheetExport> sheets)
@@ -167,17 +170,11 @@ public static class ExcelIo
             if (name.Length == 0) throw new ArgumentException("Every output sheet needs a name.");
             if (name.Length > 31 || name.IndexOfAny(new[] { '[', ']', ':', '*', '?', '/', '\\' }) >= 0)
                 throw new ArgumentException($"Invalid Excel sheet name: '{name}'. Names must be 1–31 characters and cannot contain : \\ / ? * [ ].");
+            if (name.StartsWith('\'') || name.EndsWith('\''))
+                throw new ArgumentException($"Invalid Excel sheet name: '{name}'. Names cannot start or end with an apostrophe.");
             if (!usedNames.Add(name)) throw new ArgumentException($"Duplicate output sheet name '{name}'. Sheet names must be unique.");
 
-            var oneBytes = Write(item.Data, item.Columns, item.Headers);
-            using var one = new XLWorkbook(new MemoryStream(oneBytes));
-            var source = one.Worksheet(1);
-            var target = output.Worksheets.Add(name);
-            var lastRow = source.LastRowUsed()?.RowNumber() ?? 1;
-            var lastCol = source.LastColumnUsed()?.ColumnNumber() ?? 1;
-            source.Range(1, 1, Math.Max(1, lastRow), Math.Max(1, lastCol)).CopyTo(target.Cell(1, 1));
-            for (int c = 1; c <= lastCol; c++) target.Column(c).Width = source.Column(c).Width;
-            target.SheetView.FreezeRows(1);
+            FillSheet(output.Worksheets.Add(name), item.Data, item.Columns, item.Headers);
         }
         using var ms = new MemoryStream();
         output.SaveAs(ms);

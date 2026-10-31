@@ -5,6 +5,8 @@ services:
     ports:
       - "8085:8080"        # change the left number if 8085 is taken
     restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata     # "Age" and file-name timestamps use the server date; change to your own time zone if needed
     mem_limit: 256m        # hard caps so it can never starve the media server
     cpus: 0.5
     user: "1000:1000"      # run as your Debian user (check with: id -u; id -g) so it can write to ./data
