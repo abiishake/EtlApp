@@ -78,6 +78,47 @@
   .fileinfo { color:var(--muted); font-size:13px; margin-top:6px; }
   .help { color:var(--muted); font-size:13px; margin:0 0 10px; }
   button.danger:hover:not(:disabled) { border-color:var(--err); color:var(--err); }
+
+  /* numbered step bar */
+  .stepper { position:sticky; top:0; z-index:20; background:var(--bg); padding:10px 0; margin:0 0 16px; border-bottom:1px solid var(--line); }
+  .stepper ol { list-style:none; display:flex; gap:4px; margin:0; padding:0; counter-reset:st; }
+  .stepper li { flex:1; display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; cursor:pointer; color:var(--muted); font-size:13px; min-width:0; }
+  .stepper li::before { counter-increment:st; content:counter(st); flex:none; width:24px; height:24px; border-radius:50%; display:grid; place-items:center;
+                        border:1.5px solid var(--line); font-weight:600; font-size:12px; background:var(--card); }
+  .stepper li span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .stepper li.done::before { content:"✓"; border-color:var(--ok); color:var(--ok); }
+  .stepper li.current { color:var(--text); font-weight:600; background:var(--card); }
+  .stepper li.current::before { background:var(--accent); border-color:var(--accent); color:#fff; content:counter(st); }
+  .stepper li.locked { opacity:.45; cursor:not-allowed; }
+  @media (max-width:640px) { .stepper li span { display:none; } .stepper li { justify-content:center; } }
+  main > section { scroll-margin-top:72px; }
+
+  /* sheet tabs */
+  .tabs { display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-top:4px; }
+  .tab { border:1px solid transparent; border-bottom:0; border-radius:8px 8px 0 0; padding:8px 14px; margin-bottom:-1px; color:var(--muted); background:transparent; }
+  .tab:hover:not(:disabled) { border-color:var(--line); color:var(--text); }
+  .tab.active { background:var(--card); border-color:var(--line); border-bottom:1px solid var(--card); color:var(--text); font-weight:600; box-shadow:inset 0 2px 0 var(--accent); }
+  .tab.add { color:var(--accent); }
+  .tab-actions { margin-top:10px; }
+
+  /* simple filter builder */
+  .joiner { font-size:11px; font-weight:600; letter-spacing:.05em; color:var(--muted); margin:2px 0 6px 2px; }
+  button.soft { color:var(--accent); border-color:var(--accent); font-weight:600; }
+
+  /* grouped column picker */
+  .cgroup + .cgroup { border-top:1px solid var(--line); }
+  .chead { position:sticky; top:0; z-index:1; display:flex; gap:8px; align-items:center; padding:8px 12px; background:var(--bg); border-bottom:1px solid var(--line); }
+  .chead b { font-size:13px; }
+  .chead .opt { font-size:12px; margin-right:auto; }
+  button.mini { padding:2px 10px; font-size:12px; }
+
+  /* preview */
+  .pvwrap { overflow:auto; max-height:360px; border:1px solid var(--line); border-radius:8px; margin-top:10px; }
+  .pvwrap:empty { display:none; }
+  table.pv { border-collapse:collapse; font-size:13px; width:max-content; min-width:100%; }
+  table.pv th, table.pv td { padding:6px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+  table.pv th { position:sticky; top:0; background:var(--bg); font-weight:600; }
+  table.pv tr:last-child td { border-bottom:0; }
 </style>
 </head>
 <body>
@@ -85,7 +126,17 @@
   <h1>Research Form ETL</h1>
   <p class="sub">Upload the Excel file, optionally filter the rows, pick the columns you want, download the transformed sheet.</p>
 
-  <section class="card">
+  <nav id="stepper" class="stepper" aria-label="Progress">
+    <ol>
+      <li data-target="uploadCard"><span>Upload</span></li>
+      <li data-target="sheetCard"><span>Sheets</span></li>
+      <li data-target="filterCard"><span>Filter rows</span></li>
+      <li data-target="pick"><span>Columns</span></li>
+      <li data-target="previewCard"><span>Preview &amp; download</span></li>
+    </ol>
+  </nav>
+
+  <section id="uploadCard" class="card">
     <h2><span class="step">1.</span>Upload Excel file</h2>
     <p class="help">Choose the research-form .xlsx (max 50 MB), or drag &amp; drop it anywhere on this page.</p>
     <div class="row">
@@ -98,22 +149,28 @@
   </section>
 
   <section id="sheetCard" class="card hidden">
-    <h2>Output workbook</h2>
-    <p class="help">Each sheet in the downloaded workbook has its own filters and columns. Click “Edit settings” on a sheet, then use steps 2 and 3 below.</p>
+    <h2><span class="step">2.</span>Output sheets</h2>
+    <p class="help">Each tab is one sheet in the downloaded workbook, with its own filters and columns. Pick a tab, then use the steps below.</p>
     <div class="row" style="margin-bottom:10px">
       <strong>Saved Sheets</strong>
       <select id="workflowList" aria-label="Saved sheets"><option value="">Select saved sheets…</option></select>
       <button id="loadWorkflowBtn">Load</button>
       <button id="saveWorkflowBtn" title="Remember the current sheets, filters and columns in this browser">Save current setup</button>
+      <label style="display:inline-flex;align-items:center;gap:6px" title="Name for this setup in Saved Sheets. Defaults to the output file name (step 5) — change it here or on step 5.">Setup name
+        <input type="text" id="setupName" maxlength="100" placeholder="Same as output file name" style="width:200px">
+      </label>
       <button id="deleteWorkflowBtn" class="danger">Delete</button>
     </div>
-    <div style="margin:10px 0"><button id="addSheetBtn">+ Add sheet</button></div>
-    <div id="sheetTabs" class="sheet-list"></div><div id="workflowStatus" class="status"></div>
+    <div id="sheetTabs" class="tabs" role="tablist" aria-label="Output sheets"></div>
+    <div class="row tab-actions">
+      <button id="renameSheetBtn">Rename sheet</button>
+      <button id="removeSheetBtn" class="danger">Remove sheet</button>
+    </div><div id="workflowStatus" class="status"></div>
   </section>
 
   <section id="filterCard" class="card hidden">
     <div class="row" style="align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-      <h2 style="margin:0"><span class="step">2.</span>Filter rows <span class="opt">(optional)</span><span class="badge editing-badge"></span></h2>
+      <h2 style="margin:0"><span class="step">3.</span>Filter rows <span class="opt">(optional)</span><span class="badge editing-badge"></span></h2>
       <div class="row" style="align-items:center;gap:8px">
         <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
         <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (required)" aria-label="Filter name" style="width:220px">
@@ -124,10 +181,11 @@
       <div id="savedList"></div>
       <div id="savedMsg" class="status" style="margin-top:6px"></div>
     </details>
-    <p id="noFilters" class="empty">No filters: all rows will be exported. Add a group to start filtering.</p>
+    <p id="noFilters" class="empty">No filters: all rows will be exported.</p>
     <div id="filters"></div>
     <div class="row" style="margin-top:8px">
-      <button id="addGroup">+ Add group</button>
+      <button id="addFilter" class="soft">+ Add filter</button>
+      <button id="addGroup" class="hidden" title="Group filters to mix AND / OR">+ Add group</button>
       <button id="clearFilters">Clear filters</button>
       <span id="matchCount" class="count"></span>
     </div>
@@ -135,7 +193,7 @@
   </section>
 
   <section id="pick" class="card hidden">
-    <h2><span class="step">3.</span>Choose columns for the export<span class="badge editing-badge"></span></h2>
+    <h2><span class="step">4.</span>Choose columns for the export<span class="badge editing-badge"></span></h2>
     <div class="row">
       <input id="search" type="search" placeholder="Filter columns…">
       <button id="allBtn">Select all</button>
@@ -144,6 +202,13 @@
       <span id="count" class="count"></span>
     </div>
     <div id="cols"></div>
+  </section>
+
+  <section id="previewCard" class="card hidden">
+    <h2><span class="step">5.</span>Preview &amp; download<span class="badge editing-badge"></span></h2>
+    <p class="help">The first rows of the active sheet, exactly as they will be exported.</p>
+    <div id="pvStatus" class="status" style="margin:0"></div>
+    <div id="pvTable" class="pvwrap"></div>
 
     <div id="dl" class="dl hidden">
       <span class="opt">Workbook file name</span>
@@ -179,6 +244,7 @@
   let outputSheets = [];
   let activeSheetIndex = 0;
   let restoringSheet = false;
+  const PREVIEW_ROWS = 10;
   const OP_TEXT = { contains: "contains", notContains: "does not contain", equals: "=", notEquals: "≠", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -210,6 +276,7 @@
 
     $("uploadBtn").disabled = true;
     $("pick").classList.add("hidden");
+    $("previewCard").classList.add("hidden");
     $("filterCard").classList.add("hidden");
     $("notes").classList.add("hidden");
     setStatus($("status"), "Uploading and transforming…");
@@ -236,6 +303,7 @@
       outputSheets = [{ name: "Transformed Data", state: null }];
       activeSheetIndex = 0;
       $("fileName").value = f.name.replace(/\.xlsx$/i, "") + "_Transformed";
+      setupNameCustom = false; syncSetupName();
       $("sheetCard").classList.remove("hidden");
       setStatus($("workflowStatus"), "");
       renderSheetTabs();
@@ -255,6 +323,8 @@
       loadSaved();
       $("filterCard").classList.remove("hidden");
       $("pick").classList.remove("hidden");
+      $("previewCard").classList.remove("hidden");
+      pvKey = ""; schedulePreview(); updateStepper();
     } catch (e) {
       setStatus($("status"), e.message, "err");
     } finally {
@@ -299,37 +369,47 @@
     updateBadges();
     const box = $("sheetTabs"); box.replaceChildren();
     outputSheets.forEach((sh, i) => {
-      const wrap = el("div", "row");
-      const name = el("span", "sheet-name", sh.name + (i === activeSheetIndex ? " (editing)" : ""));
-      const edit = el("button", i === activeSheetIndex ? "primary" : "", "Edit settings");
-      edit.onclick = () => { if (i !== activeSheetIndex) restoreSheet(i); };
-      const rename = el("button", null, "Rename");
-      rename.onclick = () => {
-        const n = prompt("Output sheet name (max 31 characters):", sh.name);
-        if (n == null) return;
-        const cleaned = n.trim();
-        if (!cleaned || cleaned.length > 31 || /[\\/?*\[\]:]/.test(cleaned)) return alert("Enter a valid Excel sheet name (1–31 characters; no \\ / ? * [ ] : characters).");
-        if (outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === cleaned.toLowerCase())) return alert("Sheet names must be unique.");
-        sh.name = cleaned; renderSheetTabs();
-      };
-      const remove = el("button", null, "Remove"); remove.disabled = outputSheets.length === 1;
-      remove.onclick = () => {
-        if (outputSheets.length < 2) return;
-        outputSheets.splice(i, 1);
-        const next = Math.min(activeSheetIndex > i ? activeSheetIndex - 1 : activeSheetIndex, outputSheets.length - 1);
-        activeSheetIndex = -1; restoreSheet(next);
-      };
-      wrap.append(name, edit, rename, remove); box.append(wrap);
+      const t = el("button", "tab" + (i === activeSheetIndex ? " active" : ""), sh.name);
+      t.setAttribute("role", "tab"); t.setAttribute("aria-selected", i === activeSheetIndex);
+      t.onclick = () => { if (i !== activeSheetIndex) restoreSheet(i); };
+      t.ondblclick = renameActiveSheet;
+      box.append(t);
     });
+    const add = el("button", "tab add", "+ Add sheet"); add.onclick = addSheet; box.append(add);
+    $("removeSheetBtn").disabled = outputSheets.length < 2;
   }
-  $("addSheetBtn").onclick = () => {
+  function renameActiveSheet() {
+    const i = activeSheetIndex, sh = outputSheets[i]; if (!sh) return;
+    const n = prompt("Output sheet name (max 31 characters):", sh.name);
+    if (n == null) return;
+    const cleaned = n.trim();
+    if (!cleaned || cleaned.length > 31 || /[\\/?*\[\]:]/.test(cleaned)) return alert("Enter a valid Excel sheet name (1–31 characters; no \\ / ? * [ ] : characters).");
+    if (outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === cleaned.toLowerCase())) return alert("Sheet names must be unique.");
+    sh.name = cleaned; renderSheetTabs();
+  }
+  $("renameSheetBtn").onclick = renameActiveSheet;
+  $("removeSheetBtn").onclick = () => {
+    if (outputSheets.length < 2) return;
+    const i = activeSheetIndex;
+    if (!confirm(`Remove sheet “${outputSheets[i].name}”?`)) return;
+    outputSheets.splice(i, 1);
+    activeSheetIndex = -1; restoreSheet(Math.min(i, outputSheets.length - 1));
+  };
+  function addSheet() {
     captureSheet();
     let n = `Sheet ${outputSheets.length + 1}`, suffix = 2;
     while (outputSheets.some(sh => sh.name.toLowerCase() === n.toLowerCase())) n = `Sheet ${outputSheets.length + 1} (${suffix++})`;
     outputSheets.push({ name: n, state: null });
     restoreSheet(outputSheets.length - 1);
-  };
+  }
   const WORKFLOW_KEY = "etl-multi-sheet-workflows-v1";
+  let setupNameCustom = false;
+  function syncSetupName() {
+    if (setupNameCustom) return;
+    $("setupName").value = $("fileName").value.trim().replace(/\.xlsx$/i, "").trim();
+  }
+  $("fileName").addEventListener("input", syncSetupName);
+  $("setupName").addEventListener("input", () => { setupNameCustom = true; });
   function readWorkflows() { try { return JSON.parse(localStorage.getItem(WORKFLOW_KEY) || "[]"); } catch { return []; } }
   function refreshWorkflowList() {
     const sel = $("workflowList"), prior = sel.value;
@@ -340,13 +420,14 @@
   function saveCurrentWorkflow() {
     captureSheet();
     const fileBase = $("fileName").value.trim().replace(/\.xlsx$/i, "").trim();
-    const name = fileBase || "Transformed Data";
+    const name = $("setupName").value.trim() || fileBase || "Transformed Data";
     const saved = readWorkflows();
     const workflow = { name, fileName: $("fileName").value, sheets: outputSheets.map(x => ({ name: x.name, state: x.state })) };
     const i = saved.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
     if (i >= 0) saved[i] = workflow; else saved.push(workflow);
     try { localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); } catch { /* storage full / blocked: the download must still work */ }
     refreshWorkflowList(); $("workflowList").value = name;
+    $("setupName").value = name;
     return name;
   }
   $("loadWorkflowBtn").onclick = () => {
@@ -354,6 +435,7 @@
     if (!name) return setStatus($("workflowStatus"), "Choose a saved setup from the list first.", "err");
     const workflow = readWorkflows().find(x => x.name === name); if (!workflow) return;
     if (workflow.fileName) $("fileName").value = workflow.fileName;
+    setupNameCustom = false; syncSetupName();
     const skipped = [];
     outputSheets = (workflow.sheets || []).map(x => ({ name: x.name, state: x.state ? { ...x.state, root: cleanRoot(x.state.root, skipped) } : null }));
     if (!outputSheets.length) outputSheets = [{ name: "Transformed Data", state: null }];
@@ -379,6 +461,7 @@
 
   // ------------------------------------------------------------------ filters
   const newFilter = () => { const first = info[0]; return { column: first.name, op: OPS[first.type][0][0], value: "" }; };
+  $("addFilter").onclick = () => { root.items.push(newFilter()); renderFilters(); };
   $("addGroup").onclick = () => { root.items.push({ mode: "and", items: [newFilter()] }); renderFilters(); };
   $("clearFilters").onclick = () => { root.items = []; renderFilters(); scheduleCount(); };
 
@@ -398,22 +481,23 @@
   function renderFilters() {
     const box = $("filters");
     box.replaceChildren();
-    $("noFilters").classList.toggle("hidden", root.items.length > 0);
-    root.items.forEach((n, i) => {
-      if (i > 0) box.append(renderConnector());
-      box.append(n.items ? renderGroup(n, root, "Group " + (i + 1)) : renderFilter(n, root));
+    const n = root.items.length;
+    $("noFilters").classList.toggle("hidden", n > 0);
+    $("addGroup").classList.toggle("hidden", n === 0);      // groups only once there is something to group
+    if (n > 1) {
+      const head = el("div", "ghead");
+      head.append(el("span", "opt", "Keep rows that match"));
+      const sel = makeSelect([["and", "ALL of these (AND)"], ["or", "ANY of these (OR)"]], root.mode);
+      sel.onchange = () => { root.mode = sel.value; renderFilters(); scheduleCount(); };
+      head.append(sel);
+      box.append(head);
+    }
+    let g = 0;
+    root.items.forEach((it, i) => {
+      if (i > 0) box.append(el("div", "joiner", root.mode === "or" ? "OR" : "AND"));
+      box.append(it.items ? renderGroup(it, root, "Group " + (++g)) : renderFilter(it, root));
     });
     refresh();
-  }
-
-  // the AND/OR between two groups (one value for the whole list, so every connector shows the same choice)
-  function renderConnector() {
-    const c = el("div", "gconn");
-    c.append(el("span", "opt", "Combine the groups with"));
-    const sel = makeSelect([["and", "AND (both groups must match)"], ["or", "OR (either group may match)"]], root.mode);
-    sel.onchange = () => { root.mode = sel.value; renderFilters(); scheduleCount(); };
-    c.append(sel);
-    return c;
   }
 
   // one group: its own AND/OR for the filters inside it
@@ -565,6 +649,7 @@
     root = toRoot(items, sf.mode);
     // saved entries remember a sheet / file label, not the workbook name: only fill the name in when it is empty
     if (!$("fileName").value.trim()) $("fileName").value = sf.fileName.replace(/\.xlsx$/i, "");
+    syncSetupName();
     $("saveFilters").checked = true;
     $("saveName").value = sf.name;
 
@@ -618,34 +703,111 @@
   }
 
   // ------------------------------------------------------------------ column picker
+  function columnRow(c) {
+    const label = el("label", "col");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selected.has(c) || LOCKED.has(c);
+    if (LOCKED.has(c)) cb.disabled = true;
+    cb.onchange = () => { cb.checked ? selected.add(c) : selected.delete(c); renderColumns(); };
+    label.append(cb, el("span", null, c));
+    if (LOCKED.has(c)) label.append(el("em", "tag", "required"));
+    if ($("renameToggle").checked) {
+      const rn = document.createElement("input");
+      rn.type = "text"; rn.className = "rn"; rn.placeholder = "Rename to…";
+      rn.value = renames[c] || "";
+      rn.onclick = e => e.stopPropagation();
+      rn.oninput = () => { const v = rn.value.trim(); if (v) renames[c] = v; else delete renames[c]; captureSheet(); schedulePreview(); };
+      label.append(rn);
+    }
+    return label;
+  }
   function renderColumns() {
     const q = $("search").value.trim().toLowerCase();
     const box = $("cols");
     box.replaceChildren();
-    columns.filter(c => c.toLowerCase().includes(q)).forEach(c => {
-      const label = el("label", "col");
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = selected.has(c) || LOCKED.has(c);
-      if (LOCKED.has(c)) cb.disabled = true;
-      cb.onchange = () => { cb.checked ? selected.add(c) : selected.delete(c); refresh(); };
-
-      label.append(cb, el("span", null, c));
-      if (LOCKED.has(c)) label.append(el("em", "tag", "required"));
-      if (CALCULATED.has(c)) label.append(el("em", "tag", "calculated"));
-      if ($("renameToggle").checked) {
-        const rn = document.createElement("input");
-        rn.type = "text"; rn.className = "rn"; rn.placeholder = "Rename to…";
-        rn.value = renames[c] || "";
-        rn.onclick = e => e.stopPropagation();
-        rn.oninput = () => { const v = rn.value.trim(); if (v) renames[c] = v; else delete renames[c]; };
-        label.append(rn);
-      }
-      box.append(label);
-    });
+    const groups = [
+      ["Calculated columns", columns.filter(c => CALCULATED.has(c))],
+      ["Original columns", columns.filter(c => !CALCULATED.has(c))]
+    ];
+    for (const [title, list] of groups) {
+      const shown = list.filter(c => c.toLowerCase().includes(q));
+      if (!shown.length) continue;
+      const g = el("div", "cgroup"), head = el("div", "chead");
+      const n = list.filter(c => selected.has(c) || LOCKED.has(c)).length;
+      head.append(el("b", null, title), el("span", "opt", `${n} of ${list.length} selected`));
+      const all = el("button", "mini", "All"), none = el("button", "mini", "None");
+      all.onclick = () => { list.forEach(c => selected.add(c)); renderColumns(); };
+      none.onclick = () => { list.forEach(c => { if (!LOCKED.has(c)) selected.delete(c); }); renderColumns(); };
+      head.append(all, none);
+      g.append(head, ...shown.map(columnRow));
+      box.append(g);
+    }
+    if (!box.children.length) box.append(el("p", "empty", "  No columns match the search."));
     refresh();
   }
+
+  // ------------------------------------------------------------------ preview (first rows of the active sheet)
+  let pvTimer = null, pvKey = "", pvNo = 0;
+  function schedulePreview() { clearTimeout(pvTimer); pvTimer = setTimeout(runPreview, 400); }
+  async function runPreview() {
+    if (!sessionId) return;
+    const body = {
+      id: sessionId, columns: columns.filter(c => selected.has(c) || LOCKED.has(c)),
+      filters: activeFilters(), mode: root.mode,
+      renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS
+    };
+    const key = JSON.stringify(body);
+    if (key === pvKey) return;
+    pvKey = key;
+    const mine = ++pvNo;
+    setStatus($("pvStatus"), "Loading preview…");
+    try {
+      const res = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: key });
+      const d = await readJson(res);
+      if (mine !== pvNo) return;
+      if (!res.ok) throw new Error(d.error || `Preview failed (HTTP ${res.status}).`);
+      renderPreview(d);
+    } catch (e) {
+      if (mine !== pvNo) return;
+      pvKey = ""; $("pvTable").replaceChildren();
+      setStatus($("pvStatus"), e.message, "err");
+    }
+  }
+  function renderPreview(d) {
+    const box = $("pvTable");
+    if (!d.rows.length) { box.replaceChildren(); return setStatus($("pvStatus"), "No rows match the filters, so there is nothing to preview."); }
+    const t = el("table", "pv"), thead = el("thead"), hr = el("tr"), tb = el("tbody");
+    d.headers.forEach(h => hr.append(el("th", null, h)));
+    thead.append(hr);
+    d.rows.forEach(r => { const tr = el("tr"); r.forEach(v => { const td = el("td", null, v); td.title = v; tr.append(td); }); tb.append(tr); });
+    t.append(thead, tb);
+    box.replaceChildren(t);
+    setStatus($("pvStatus"), `Showing the first ${d.rows.length} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.`);
+  }
+
+  // ------------------------------------------------------------------ step bar
+  const STEP_LIS = [...document.querySelectorAll("#stepper li")];
+  STEP_LIS.forEach(li => li.onclick = () => {
+    const s = $(li.dataset.target);
+    if (!s.classList.contains("hidden")) s.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  function updateStepper() {
+    const secs = STEP_LIS.map(li => $(li.dataset.target));
+    let cur = 0;
+    secs.forEach((s, i) => { if (!s.classList.contains("hidden") && s.getBoundingClientRect().top < window.innerHeight * 0.4) cur = i; });
+    if (!sessionId) cur = 0;
+    STEP_LIS.forEach((li, i) => {
+      const locked = secs[i].classList.contains("hidden");
+      li.classList.toggle("locked", locked);
+      li.classList.toggle("current", i === cur);
+      li.classList.toggle("done", !!sessionId && i < cur);
+      if (i === cur) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
+    });
+  }
+  window.addEventListener("scroll", updateStepper, { passive: true });
+  window.addEventListener("resize", updateStepper);
+  updateStepper();
 
   function refresh() {
     if (!restoringSheet && activeFilters().length === 0 && $("saveFilters").checked) $("saveFilters").checked = false;   // nothing to remember
@@ -664,6 +826,7 @@
       matchCount === 0 ? "No rows match the filters."
       : matchCount == null ? ""
       : `Will export ${fmt(matchCount)} rows × ${selected.size} columns`);
+    schedulePreview();
   }
 
   $("saveFilters").onchange = refresh;
@@ -731,7 +894,7 @@
     $("fileInfo").textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : "";
   };
   $("file").onchange = showFileInfo;
-  const dropCard = document.querySelector("section.card");
+  const dropCard = $("uploadCard");
   const hasFiles = e => !!e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
   ["dragenter", "dragover"].forEach(t => window.addEventListener(t, e => { if (!hasFiles(e)) return; e.preventDefault(); dropCard.classList.add("dropping"); }));
   window.addEventListener("dragleave", e => { if (!e.relatedTarget) dropCard.classList.remove("dropping"); });

@@ -1,4 +1,5 @@
 using EtlApp.Etl;
+using System.Globalization;
 using Microsoft.AspNetCore.Http.Features;
 
 const long MaxUploadBytes = 50L * 1024 * 1024;
@@ -68,6 +69,32 @@ app.MapPost("/api/count", (CountRequest body, SessionStore store) =>
     {
         var rows = Filtering.Apply(data, body.Filters, body.Mode);
         return Results.Ok(new { count = rows.Count, total = data.Rows.Count });
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// 2b) First few rows of the (filtered) data with the chosen columns, for the preview table
+app.MapPost("/api/preview", (PreviewRequest body, SessionStore store) =>
+{
+    var data = store.Get(body.Id ?? "");
+    if (data == null)
+        return Results.NotFound(new { error = "Session expired. Please upload the file again." });
+
+    var chosen = new HashSet<string>(body.Columns ?? new List<string>());
+    var columns = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();
+    try
+    {
+        var rows = Filtering.Apply(data, body.Filters, body.Mode);
+        var limit = Math.Clamp(body.Limit ?? 10, 1, 50);
+        var headers = columns.Select(c =>
+            body.Renames != null && body.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
+        var sample = rows.Take(limit)
+            .Select(r => columns.Select(c => PreviewText(r.TryGetValue(c, out var v) ? v : null)).ToList())
+            .ToList();
+        return Results.Ok(new { headers, rows = sample, total = rows.Count });
     }
     catch (ArgumentException ex)
     {
@@ -219,6 +246,15 @@ app.MapDelete("/api/saved-filters/{id:long}", (long id, SavedFilterStore saved, 
     }
 });
 
+static string PreviewText(object? v) => v switch
+{
+    null => "",
+    DateTime d => d.TimeOfDay == TimeSpan.Zero ? d.ToString("yyyy-MM-dd") : d.ToString("yyyy-MM-dd HH:mm"),
+    double x => x.ToString("0.####", CultureInfo.InvariantCulture),
+    IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+    _ => v.ToString() ?? ""
+};
+
 static string? SanitizeFileName(string? name)
 {
     if (string.IsNullOrWhiteSpace(name)) return null;
@@ -233,6 +269,7 @@ static string? SanitizeFileName(string? name)
 app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
+record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit);
 record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName);
 
 record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
