@@ -92,11 +92,10 @@ app.MapPost("/api/preview", (PreviewRequest body, SessionStore store) =>
     if (data == null)
         return Results.NotFound(new { error = "Session expired. Please upload the file again." });
 
-    var chosen = new HashSet<string>(body.Columns ?? new List<string>());
-    var columns = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();
+    var columns = OrderedColumns(data.Columns, body.Columns);
     try
     {
-        var rows = Filtering.Apply(data, body.Filters, body.Mode);
+        var rows = SortRows(Filtering.Apply(data, body.Filters, body.Mode), body.Sorts, data.Columns);
         var limit = Math.Clamp(body.Limit ?? 10, 1, 50);
         var headers = columns.Select(c =>
             body.Renames != null && body.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
@@ -118,13 +117,12 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
     if (data == null)
         return Results.NotFound(new { error = "Session expired. Please upload the file again." });
 
-    var chosen = new HashSet<string>(body.Columns ?? new List<string>());
-    var columns = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();   // Id is always exported   // keep the standard column order
+    var columns = OrderedColumns(data.Columns, body.Columns);   // Id is always exported; the user's column order is kept
     if (columns.Count == 0)
         return Results.BadRequest(new { error = "Select at least one column." });
 
     List<Dictionary<string, object?>> rows;
-    try { rows = Filtering.Apply(data, body.Filters, body.Mode); }
+    try { rows = SortRows(Filtering.Apply(data, body.Filters, body.Mode), body.Sorts, data.Columns); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 
     if (rows.Count == 0)
@@ -190,10 +188,9 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
         var pendingSaves = new List<(string Name, string Label, string Mode, List<FilterSpec> Filters, List<string> Columns, Dictionary<string, string> Renames)>();
         foreach (var sheet in body.Sheets)
         {
-            var chosen = new HashSet<string>(sheet.Columns ?? new List<string>());
-            var cols = data.Columns.Where(c => chosen.Contains(c) || c == Transformer.IdColumn).ToList();
+            var cols = OrderedColumns(data.Columns, sheet.Columns);
             if (cols.Count == 0) throw new ArgumentException($"Sheet '{sheet.SheetName}' has no selected columns.");
-            var rows = Filtering.Apply(data, sheet.Filters, sheet.Mode);
+            var rows = SortRows(Filtering.Apply(data, sheet.Filters, sheet.Mode), sheet.Sorts, data.Columns);
             if (rows.Count == 0) throw new ArgumentException($"No rows match the filters for sheet '{sheet.SheetName}'.");
             var headers = cols.Select(c => sheet.Renames != null && sheet.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
             var dup = headers.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
@@ -255,6 +252,34 @@ app.MapDelete("/api/saved-filters/{id:long}", (long id, SavedFilterStore saved, 
     }
 });
 
+// Columns in the order the user arranged them (unknown names dropped, duplicates removed); Id is always included, first if the user did not place it.
+static List<string> OrderedColumns(IReadOnlyList<string> all, List<string>? requested)
+{
+    var have = new HashSet<string>(all);
+    var cols = (requested ?? new List<string>()).Where(have.Contains).Distinct().ToList();
+    if (have.Contains(Transformer.IdColumn) && !cols.Contains(Transformer.IdColumn)) cols.Insert(0, Transformer.IdColumn);
+    return cols;
+}
+
+// Multi-level sort (first entry = primary). Blank cells always go last; numbers, dates and text compare naturally.
+static List<Dictionary<string, object?>> SortRows(List<Dictionary<string, object?>> rows, List<SortSpec>? sorts, IReadOnlyList<string> all)
+{
+    var have = new HashSet<string>(all);
+    var levels = (sorts ?? new List<SortSpec>())
+        .Where(s => !string.IsNullOrWhiteSpace(s.Column) && have.Contains(s.Column!))
+        .GroupBy(s => s.Column).Select(g => g.First()).ToList();
+    if (levels.Count == 0 || rows.Count < 2) return rows;
+    IOrderedEnumerable<Dictionary<string, object?>>? ordered = null;
+    foreach (var lv in levels)
+    {
+        var col = lv.Column!;
+        var cmp = new CellComparer(string.Equals(lv.Dir, "desc", StringComparison.OrdinalIgnoreCase));
+        Func<Dictionary<string, object?>, object?> key = r => r.TryGetValue(col, out var v) ? v : null;
+        ordered = ordered == null ? rows.OrderBy(key, cmp) : ordered.ThenBy(key, cmp);   // stable: ties keep the file order
+    }
+    return ordered!.ToList();
+}
+
 static string PreviewText(object? v) => v switch
 {
     null => "",
@@ -278,8 +303,28 @@ static string? SanitizeFileName(string? name)
 app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
-record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName);
+record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit, List<SortSpec>? Sorts);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts);
 
 record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
-record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName);
+record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts);
+record SortSpec(string? Column, string? Dir);
+
+// Compares cell values for sorting: blanks last (in both directions), then numbers, dates, booleans, text (case-insensitive).
+sealed class CellComparer(bool desc) : IComparer<object?>
+{
+    static bool Blank(object? v) => v == null || (v is string s && string.IsNullOrWhiteSpace(s));
+    static int Rank(object v) => v switch { double or int or long or decimal or float => 0, DateTime => 1, bool => 2, _ => 3 };
+    public int Compare(object? a, object? b)
+    {
+        bool ba = Blank(a), bb = Blank(b);
+        if (ba || bb) return ba == bb ? 0 : ba ? 1 : -1;
+        int ra = Rank(a!), rb = Rank(b!);
+        int r = ra != rb ? ra.CompareTo(rb)
+            : ra == 0 ? Convert.ToDouble(a, CultureInfo.InvariantCulture).CompareTo(Convert.ToDouble(b, CultureInfo.InvariantCulture))
+            : ra == 1 ? ((DateTime)a!).CompareTo((DateTime)b!)
+            : ra == 2 ? ((bool)a!).CompareTo((bool)b!)
+            : StringComparer.OrdinalIgnoreCase.Compare(Convert.ToString(a, CultureInfo.InvariantCulture), Convert.ToString(b, CultureInfo.InvariantCulture));
+        return desc ? -r : r;
+    }
+}

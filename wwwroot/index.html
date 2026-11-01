@@ -119,6 +119,22 @@
   table.pv th, table.pv td { padding:6px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
   table.pv th { position:sticky; top:0; background:var(--bg); font-weight:600; }
   table.pv tr:last-child td { border-bottom:0; }
+
+  /* column order + sort */
+  .subsec { border-top:1px solid var(--line); margin-top:16px; padding-top:12px; }
+  .subsec h3 { margin:0 0 4px; font-size:14px; }
+  .olist { list-style:none; margin:8px 0 0; padding:0; max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:8px; counter-reset:oc; }
+  .olist li { display:flex; align-items:center; gap:8px; padding:5px 10px; border-bottom:1px solid var(--line); background:var(--card); cursor:grab; font-size:13px; }
+  .olist li:last-child { border-bottom:0; }
+  .olist li::before { counter-increment:oc; content:counter(oc); width:22px; color:var(--muted); font-size:12px; text-align:right; }
+  .olist li .nm { margin-right:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .olist li .grip { color:var(--muted); }
+  .olist li.dragging { opacity:.4; }
+  .olist li.over-top { box-shadow:inset 0 2px 0 var(--accent); }
+  .olist li.over-bottom { box-shadow:inset 0 -2px 0 var(--accent); }
+  .srow { display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .srow .lbl { width:60px; font-size:12px; color:var(--muted); }
+  .srow select:first-of-type { min-width:220px; }
 </style>
 </head>
 <body>
@@ -202,6 +218,21 @@
       <span id="count" class="count"></span>
     </div>
     <div id="cols"></div>
+
+    <div class="subsec">
+      <h3>Column order</h3>
+      <p class="help" style="margin:0">Drag a column, or use the arrows, to set the order of columns in the downloaded sheet.
+        <button id="resetOrder" class="mini">Reset to original order</button></p>
+      <ol id="orderList" class="olist" aria-label="Column order"></ol>
+    </div>
+
+    <div class="subsec">
+      <h3>Sort rows <span class="opt">(optional)</span></h3>
+      <p class="help" style="margin:0 0 8px">Sort by one column, or add more to break ties (e.g. by Country, then by Age). Blank cells always go last.</p>
+      <div id="sortList"></div>
+      <button id="addSort" class="soft">+ Add sort</button>
+      <button id="clearSort">Clear sort</button>
+    </div>
   </section>
 
   <section id="previewCard" class="card hidden">
@@ -236,6 +267,8 @@
   let columns = [];          // final columns, in order
   const selected = new Set();
   let renames = {};          // original column name -> new header (export only)
+  let order = [];            // every column in the user's export order (only the selected ones are exported)
+  let sorts = [];            // sort levels, first = primary: {column, dir: "asc"|"desc"}
   // filter tree: a group is {mode: "and"|"or", items: [...]}, a filter is {column, op, value}; groups nest freely
   let root = { mode: "and", items: [] };
   let dlSeq = 0;
@@ -260,6 +293,10 @@
   };
   const activeFilters = () => activeItems(root.items);
   const ensureLocked = () => LOCKED.forEach(c => { if (columns.includes(c)) selected.add(c); });
+  // a saved order may miss new columns or contain gone ones: keep the known ones, append the rest in file order
+  const normOrder = o => { const have = new Set(columns), seen = new Set(); const out = (o || []).filter(c => have.has(c) && !seen.has(c) && seen.add(c)); return out.concat(columns.filter(c => !seen.has(c))); };
+  const normSorts = list => (list || []).filter(x => x && columns.includes(x.column)).map(x => ({ column: x.column, dir: x.dir === "desc" ? "desc" : "asc" }));
+  const chosenCols = () => order.filter(c => selected.has(c) || LOCKED.has(c));
   const fmt = n => Number(n).toLocaleString();
   const MAX_UPLOAD = 50 * 1024 * 1024;                       // same limit as the server
   const readJson = async res => { try { return await res.json(); } catch { return {}; } };   // error pages (e.g. 413) are not JSON
@@ -294,6 +331,7 @@
       info = data.columnInfo;
       byName = Object.fromEntries(info.map(c => [c.name, c]));
       columns = data.columns;
+      order = [...columns]; sorts = [];
       selected.clear();
       renames = {};
       $("renameToggle").checked = false;
@@ -337,6 +375,7 @@
     if (!outputSheets.length || activeSheetIndex < 0 || restoringSheet) return;
     outputSheets[activeSheetIndex].state = {
       root: JSON.parse(JSON.stringify(root)), selected: [...selected], renames: { ...renames },
+      order: [...order], sorts: sorts.map(x => ({ ...x })),
       renameEnabled: $("renameToggle").checked,
       saveFilters: $("saveFilters").checked, saveName: $("saveName").value
     };
@@ -350,6 +389,7 @@
     root = st ? cleanRoot(st.root, []) : { mode: "and", items: [] };   // never restore filters on columns this file does not have
     selected.clear(); (st?.selected || columns).forEach(c => { if (columns.includes(c)) selected.add(c); }); ensureLocked();
     renames = st ? { ...st.renames } : {};
+    order = normOrder(st?.order); sorts = normSorts(st?.sorts);
     $("renameToggle").checked = st?.renameEnabled || false;
     $("saveFilters").checked = st?.saveFilters || false;
     $("saveName").value = st?.saveName || "";
@@ -664,6 +704,7 @@
         selected.clear();
         keep.forEach(c => selected.add(c));
         ensureLocked();
+        order = normOrder(keep);              // saved columns come in their saved order
         renames = {};
         Object.entries(sf.renames || {}).forEach(([c, n]) => { if (selected.has(c) && n) renames[c] = n; });
         $("renameToggle").checked = Object.keys(renames).length > 0;
@@ -745,8 +786,80 @@
       box.append(g);
     }
     if (!box.children.length) box.append(el("p", "empty", "  No columns match the search."));
+    renderOrder(); renderSorts();
     refresh();
   }
+
+  // ------------------------------------------------------------------ column order (drag & drop or arrows)
+  let dragCol = null;
+  function moveCol(c, delta) {             // move among the selected columns only
+    const vis = chosenCols(), i = vis.indexOf(c), j = i + delta;
+    if (i < 0 || j < 0 || j >= vis.length) return;
+    const a = order.indexOf(c), b = order.indexOf(vis[j]);
+    [order[a], order[b]] = [order[b], order[a]];
+    renderOrder(); refresh();
+  }
+  function dropCol(c, target, after) {
+    if (!c || c === target) return;
+    order.splice(order.indexOf(c), 1);
+    order.splice(order.indexOf(target) + (after ? 1 : 0), 0, c);
+    renderOrder(); refresh();
+  }
+  function renderOrder() {
+    const list = $("orderList"), vis = chosenCols();
+    list.replaceChildren();
+    if (!vis.length) { list.append(el("li", "empty", "Select some columns above.")); return; }
+    const shownName = c => ($("renameToggle").checked && renames[c]) ? `${renames[c]}  (${c})` : c;
+    vis.forEach((c, i) => {
+      const li = el("li"); li.draggable = true;
+      const up = el("button", "mini", "↑"), down = el("button", "mini", "↓");
+      up.title = "Move up"; down.title = "Move down";
+      up.disabled = i === 0; down.disabled = i === vis.length - 1;
+      up.onclick = () => moveCol(c, -1); down.onclick = () => moveCol(c, 1);
+      li.append(el("span", "grip", "⋮⋮"), el("span", "nm", shownName(c)), up, down);
+      li.ondragstart = e => { dragCol = c; li.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c); };
+      li.ondragend = () => { dragCol = null; li.classList.remove("dragging"); };
+      const after = e => e.offsetY > li.clientHeight / 2;
+      li.ondragover = e => { if (!dragCol) return; e.preventDefault(); li.classList.toggle("over-bottom", after(e)); li.classList.toggle("over-top", !after(e)); };
+      li.ondragleave = () => li.classList.remove("over-top", "over-bottom");
+      li.ondrop = e => { e.preventDefault(); li.classList.remove("over-top", "over-bottom"); dropCol(dragCol, c, after(e)); };
+      list.append(li);
+    });
+  }
+  $("resetOrder").onclick = () => { order = [...columns]; renderOrder(); refresh(); };
+
+  // ------------------------------------------------------------------ sort levels
+  function renderSorts() {
+    const box = $("sortList");
+    box.replaceChildren();
+    if (!sorts.length) box.append(el("p", "empty", "Not sorted: rows keep the order of the uploaded file."));
+    sorts.forEach((sv, i) => {
+      const row = el("div", "srow");
+      const used = new Set(sorts.filter((_, k) => k !== i).map(x => x.column));
+      const colSel = makeSelect(columns.filter(c => !used.has(c)).map(c => [c, c]), sv.column);
+      const isNum = byName[sv.column]?.type === "number";
+      const dirSel = makeSelect(isNum ? [["asc", "Smallest → largest"], ["desc", "Largest → smallest"]] : [["asc", "A → Z / oldest first"], ["desc", "Z → A / newest first"]], sv.dir);
+      colSel.onchange = () => { sv.column = colSel.value; renderSorts(); refresh(); };
+      dirSel.onchange = () => { sv.dir = dirSel.value; refresh(); };
+      const up = el("button", "mini", "↑"), down = el("button", "mini", "↓"), rm = el("button", "mini danger", "✕");
+      up.title = "Higher priority"; down.title = "Lower priority"; rm.title = "Remove this sort";
+      up.disabled = i === 0; down.disabled = i === sorts.length - 1;
+      up.onclick = () => { [sorts[i - 1], sorts[i]] = [sorts[i], sorts[i - 1]]; renderSorts(); refresh(); };
+      down.onclick = () => { [sorts[i + 1], sorts[i]] = [sorts[i], sorts[i + 1]]; renderSorts(); refresh(); };
+      rm.onclick = () => { sorts.splice(i, 1); renderSorts(); refresh(); };
+      row.append(el("span", "lbl", i === 0 ? "Sort by" : "then by"), colSel, dirSel, up, down, rm);
+      box.append(row);
+    });
+    $("addSort").disabled = sorts.length >= columns.length;
+    $("clearSort").disabled = !sorts.length;
+  }
+  $("addSort").onclick = () => {
+    const used = new Set(sorts.map(x => x.column));
+    const next = chosenCols().find(c => !used.has(c)) || columns.find(c => !used.has(c));
+    if (!next) return;
+    sorts.push({ column: next, dir: "asc" }); renderSorts(); refresh();
+  };
+  $("clearSort").onclick = () => { sorts = []; renderSorts(); refresh(); };
 
   // ------------------------------------------------------------------ preview (first rows of the active sheet)
   let pvTimer = null, pvKey = "", pvNo = 0;
@@ -754,8 +867,8 @@
   async function runPreview() {
     if (!sessionId) return;
     const body = {
-      id: sessionId, columns: columns.filter(c => selected.has(c) || LOCKED.has(c)),
-      filters: activeFilters(), mode: root.mode,
+      id: sessionId, columns: chosenCols(),
+      filters: activeFilters(), mode: root.mode, sorts,
       renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS,
       sheet: outputSheets[activeSheetIndex]?.name || ""      // not used by the server; makes the caption refresh when the sheet is renamed / another identical sheet is selected
     };
@@ -785,7 +898,8 @@
     d.rows.forEach(r => { const tr = el("tr"); r.forEach(v => { const td = el("td", null, v); td.title = v; tr.append(td); }); tb.append(tr); });
     t.append(thead, tb);
     box.replaceChildren(t);
-    setStatus($("pvStatus"), `Showing the first ${d.rows.length} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.`);
+    const sortTxt = sorts.length ? ` Sorted by ${sorts.map(x => `${x.column} (${x.dir === "desc" ? "descending" : "ascending"})`).join(", then ")}.` : "";
+    setStatus($("pvStatus"), `Showing the first ${d.rows.length} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.${sortTxt}`);
   }
 
   // ------------------------------------------------------------------ step bar
@@ -855,7 +969,9 @@
       const sheets = outputSheets.map(sh => {
         const st = sh.state || { root: { mode: "and", items: [] }, selected: columns, renames: {} };
         const rootState = st.root || { mode: "and", items: [] };
-        return { sheetName: sh.name, columns: st.selected || columns, filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renameEnabled === false ? {} : (st.renames || {}), saveFilters: !!st.saveFilters && cleanItems(rootState.items).length > 0, filterName: (st.saveName || "").trim() };
+        const sel = new Set(st.selected || columns);
+        const cols = normOrder(st.order).filter(c => sel.has(c) || LOCKED.has(c));
+        return { sheetName: sh.name, columns: cols, sorts: normSorts(st.sorts), filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renameEnabled === false ? {} : (st.renames || {}), saveFilters: !!st.saveFilters && cleanItems(rootState.items).length > 0, filterName: (st.saveName || "").trim() };
       });
       const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
       if (missingFilterName) {
