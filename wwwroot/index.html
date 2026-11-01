@@ -278,7 +278,6 @@
   .pvsummary { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
   #pvFilterSummary { flex:1; min-width:120px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--color-text-muted); }
   #pvCounts { display:flex; flex-wrap:wrap; gap:8px 18px; font-variant-numeric:tabular-nums; margin-bottom:8px; }
-  .pvhome { padding:8px 0; color:var(--color-text-muted); }
   table.pv th .header-sort { border:0; background:transparent; padding:0; height:28px; font-weight:600; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
   table.pv th .header-rename { margin-left:6px; width:24px; height:24px; padding:0; }
   @media (max-width:640px) { .appbar { height:auto; min-height:56px; flex-wrap:wrap; padding-block:8px; } .brand { white-space:normal; } .srow select:first-of-type { min-width:0; max-width:100%; } .frow { grid-template-columns:minmax(0,1fr); } .frow > * { max-width:100%; } .fhint { grid-column:1; } }
@@ -313,9 +312,6 @@
   <nav id="stepper" class="stepper" aria-label="Progress">
     <ol>
       <li data-target="uploadCard"><span>Upload</span></li>
-      <li data-target="sheetCard"><span>Worksheets</span></li>
-      <li data-target="filterCard"><span>Filter data</span></li>
-      <li data-target="pick"><span>Select columns</span></li>
       <li data-target="previewCard"><span>Preview &amp; export</span></li>
     </ol>
   </nav>
@@ -339,9 +335,20 @@
     <details id="notes" class="hidden"><summary>What was changed</summary><ul id="notesList"></ul><p style="margin:8px 0 0"><a id="changesLink" href="#" target="_blank" rel="noopener">See every changed record, original vs new →</a></p></details>
   </section>
 
-  <section id="sheetCard" class="card hidden">
-    <h2><span class="step">2</span>Output worksheets</h2>
-    <p class="help">Each tab is one worksheet in the exported workbook, with its own filters, columns and sorting. Pick a tab, then use the steps below.</p>
+  <section id="previewCard" class="card hidden">
+    <h2><span class="step">2</span>Preview &amp; export<span class="badge editing-badge"></span></h2>
+    <p class="help">The first rows of the active worksheet, exactly as they will be exported. Column headers show the output name; the original name appears underneath when renamed.</p>
+    <div class="pvactions" role="group" aria-label="Preview configuration">
+      <button type="button" data-pv-panel="filter" aria-expanded="false" aria-controls="pvPanel">⌕ Filter</button>
+      <button type="button" data-pv-panel="sort" aria-expanded="false" aria-controls="pvPanel">↕ Sort</button>
+      <button type="button" data-pv-panel="columns" aria-expanded="false" aria-controls="pvPanel">☷ Columns</button>
+      <button type="button" data-pv-panel="rename" aria-expanded="false" aria-controls="pvPanel">✎ Rename</button>
+      <button type="button" data-pv-panel="sheets" aria-expanded="false" aria-controls="pvPanel">▤ Sheets &amp; setups</button>
+      <button type="button" data-pv-panel="more" aria-expanded="false" aria-controls="pvPanel">⋯ More</button>
+    </div>
+    <div class="pvsummary"><span id="pvFilterSummary" title="No filters applied">No filters applied</span><button id="pvEditFilters" class="mini">Add filter</button><button id="pvClearFilters" class="mini">Clear</button></div>
+    <div id="pvCounts" role="status" aria-live="polite"></div>
+    <div id="pvControlStore" hidden>
     <div id="sheetControls">
     <div class="row setupbar">
       <strong style="font-size:13px">Saved setups</strong>
@@ -360,12 +367,8 @@
       <span class="opt" style="font-size:12px">Tip: double-click a tab to rename it; use ← → to move between tabs.</span>
     </div><div id="workflowStatus" class="status" role="status" aria-live="polite"></div>
     </div>
-  </section>
-
-  <section id="filterCard" class="card hidden">
     <div id="filterControls">
     <div class="row" style="justify-content:space-between;gap:12px;margin-bottom:10px">
-      <h2 style="margin:0"><span class="step">3</span>Filter data <span class="opt">&nbsp;(optional)</span><span class="badge editing-badge"></span></h2>
       <div class="row">
         <label class="tgl" id="saveFiltersLbl"><input type="checkbox" id="saveFilters"> Remember these filters</label>
         <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (required)" aria-label="Filter name" style="width:220px">
@@ -390,10 +393,6 @@
     <div id="filterSummary" class="fsum"></div>
     <div id="filterErr" class="status err"></div>
     </div>
-  </section>
-
-  <section id="pick" class="card hidden">
-    <h2><span class="step">4</span>Select columns<span class="badge editing-badge"></span></h2>
     <div id="columnControls">
     <div class="row">
       <input id="search" type="search" placeholder="Search columns…" aria-label="Search columns">
@@ -419,21 +418,7 @@
       <button id="addSort" class="soft">+ Add sort</button>
       <button id="clearSort">Clear sort</button>
     </div>
-  </section>
-
-  <section id="previewCard" class="card hidden">
-    <h2><span class="step">5</span>Preview &amp; export<span class="badge editing-badge"></span></h2>
-    <p class="help">The first rows of the active worksheet, exactly as they will be exported. Column headers show the output name; the original name appears underneath when renamed.</p>
-    <div class="pvactions" role="group" aria-label="Preview configuration">
-      <button type="button" data-pv-panel="filter" aria-expanded="false" aria-controls="pvPanel">⌕ Filter</button>
-      <button type="button" data-pv-panel="sort" aria-expanded="false" aria-controls="pvPanel">↕ Sort</button>
-      <button type="button" data-pv-panel="columns" aria-expanded="false" aria-controls="pvPanel">☷ Columns</button>
-      <button type="button" data-pv-panel="rename" aria-expanded="false" aria-controls="pvPanel">✎ Rename</button>
-      <button type="button" data-pv-panel="sheets" aria-expanded="false" aria-controls="pvPanel">▤ Sheets &amp; setups</button>
-      <button type="button" data-pv-panel="more" aria-expanded="false" aria-controls="pvPanel">⋯ More</button>
     </div>
-    <div class="pvsummary"><span id="pvFilterSummary" title="No filters applied">No filters applied</span><button id="pvEditFilters" class="mini">Add filter</button><button id="pvClearFilters" class="mini">Clear</button></div>
-    <div id="pvCounts" role="status" aria-live="polite"></div>
     <div id="pvPanel" class="pvpanel" hidden><div class="pvpanelhead"><h3 id="pvPanelTitle"></h3><button id="pvClosePanel" type="button" aria-label="Close Preview configuration">✕ Close</button></div><div id="pvPanelBody"></div></div>
     <div class="pvtool"><div id="pvStatus" class="status" role="status" aria-live="polite"></div></div>
     <div id="pvTable" class="pvwrap"></div>
@@ -542,9 +527,7 @@
     closePreviewPanel(false);
     $("savedContent").hidden = true; $("savedToggle").setAttribute("aria-expanded", "false");
     $("uploadBtn").disabled = true;
-    $("pick").classList.add("hidden");
     $("previewCard").classList.add("hidden");
-    $("filterCard").classList.add("hidden");
     $("notes").classList.add("hidden");
     setStatus($("status"), "Uploading and transforming…"); setPill("processing", "Uploading…");
 
@@ -574,7 +557,6 @@
       activeSheetIndex = 0;
       $("fileName").value = f.name.replace(/\.xlsx$/i, "") + "_Transformed";
       setupNameCustom = false; syncSetupName();
-      $("sheetCard").classList.remove("hidden");
       setStatus($("workflowStatus"), "");
       renderSheetTabs();
       matchCount = totalRows = data.rowCount;
@@ -593,8 +575,6 @@
       renderFilters();
       renderColumns();
       loadSaved();
-      $("filterCard").classList.remove("hidden");
-      $("pick").classList.remove("hidden");
       $("previewCard").classList.remove("hidden");
       pvKey = ""; pvPendingKey = ""; pvResult = null; ++pvNo; ++reqNo; countPending = false; schedulePreview(); updateStepper();
     } catch (e) {
@@ -1207,12 +1187,14 @@
     setStatus($("pvStatus"), `Showing the first ${Math.min(d.rows.length, PREVIEW_ROWS)} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.${sortTxt}`);
   }
 
-  // One live set of controls: move to Preview while open, restore on close.
+  // One live set of controls: park in the hidden Preview store when closed.
   const panelSources = { filter: ["filterControls"], sort: ["sortControls"], columns: ["columnControls", "orderControls"], rename: ["columnControls", "orderControls"], sheets: ["sheetControls"], more: ["notes"] };
   const panelTitles = { filter: "Filter data", sort: "Sort rows", columns: "Columns & order", rename: "Rename output columns", sheets: "Sheets & saved setups", more: "Review & workbook actions" };
   let previewPanel = null, movedControls = [], panelTrigger = null;
   function closePreviewPanel(focus = true) {
-    movedControls.forEach(({ node, home, message }) => { home.replaceWith(node); message.remove(); }); movedControls = [];
+    movedControls.forEach(({ node, home }) => {
+      if (home) home.replaceWith(node); else $("pvControlStore").append(node);
+    }); movedControls = [];
     $("pvPanelBody").replaceChildren(); $("pvPanel").hidden = true; previewPanel = null;
     document.querySelectorAll("[data-pv-panel]").forEach(b => b.setAttribute("aria-expanded", "false"));
     if (focus) panelTrigger?.focus();
@@ -1224,9 +1206,11 @@
     $("pvPanelTitle").textContent = panelTitles[name]; $("pvPanel").hidden = false;
     if (name === "rename") { $("renameToggle").checked = true; $("search").value = ""; renderColumns(); }
     for (const id of panelSources[name] || []) {
-      const node = $(id), home = document.createComment("Preview control home"), message = el("div", "pvhome");
-      const back = el("button", "mini", "Edit here"); back.onclick = () => { closePreviewPanel(false); node.scrollIntoView({ block: "start" }); node.querySelector("button,input,select")?.focus(); };
-      message.append(document.createTextNode("Currently open in Preview. "), back); node.before(home, message); $("pvPanelBody").append(node); movedControls.push({ node, home, message });
+      const node = $(id);
+      // Transformation notes keep their Upload home; configuration stays in Preview only.
+      const home = id === "notes" ? document.createComment("Transformation notes home") : null;
+      if (home) node.before(home);
+      $("pvPanelBody").append(node); movedControls.push({ node, home });
     }
     if (name === "more") {
       const upload = el("button", null, "Upload another workbook"); upload.onclick = () => { closePreviewPanel(false); $("uploadCard").scrollIntoView({ block: "start" }); $("file").focus(); };
@@ -1333,7 +1317,7 @@
       if (missingFilterName) {
         restoreSheet(outputSheets.findIndex(sh => sh.name === missingFilterName.sheetName));
         setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or uncheck Remember these filters.`, "err");
-        $("saveName").focus(); setPill("failed", "Export needs a filter name");
+        openPreviewPanel("filter"); $("saveName").focus(); setPill("failed", "Export needs a filter name");
         return;
       }
       const res = await fetch("/api/export-multiple", {
