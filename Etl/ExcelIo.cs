@@ -7,6 +7,9 @@ public static class ExcelIo
 {
     const string DataSheetName = "Research Form - Data";
 
+    /// <summary>Hidden key on every row read from the upload: the row's real number in the Excel sheet (blank rows are skipped, so it cannot be derived from the position). Never exported.</summary>
+    public const string RowNumberKey = "\u0001ExcelRow";
+
     public static (List<string> Headers, List<Dictionary<string, object?>> Rows, string Sheet) Read(Stream xlsx)
     {
         using var wb = new XLWorkbook(xlsx);
@@ -46,7 +49,7 @@ public static class ExcelIo
                 row[headers[i]] = v;
                 if (v != null) any = true;
             }
-            if (any) rows.Add(row);          // skip completely empty rows
+            if (any) { row[RowNumberKey] = r; rows.Add(row); }          // skip completely empty rows
         }
         return (headers, rows, ws.Name);
     }

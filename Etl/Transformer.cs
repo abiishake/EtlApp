@@ -106,7 +106,8 @@ public static class Transformer
 
         var cUuid = Col("_uuid");
         void Track(int i, string rule, string column, object? before, object? after) =>
-            changes.Add(new CellChange(i + 2, cUuid == null ? null : Text(rows[i], cUuid), rule,
+            changes.Add(new CellChange(rows[i].TryGetValue(ExcelIo.RowNumberKey, out var xr) && xr is int excelRow ? excelRow : i + 2,
+                cUuid == null ? null : Text(rows[i], cUuid), rule,
                 Renames.TryGetValue(column, out var rn) ? rn : column,
                 Show(before), Show(after)));
 

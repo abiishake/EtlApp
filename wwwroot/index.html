@@ -386,7 +386,7 @@
     const cleaned = n.trim();
     if (!cleaned || cleaned.length > 31 || /[\\/?*\[\]:]/.test(cleaned)) return alert("Enter a valid Excel sheet name (1–31 characters; no \\ / ? * [ ] : characters).");
     if (outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === cleaned.toLowerCase())) return alert("Sheet names must be unique.");
-    sh.name = cleaned; renderSheetTabs();
+    sh.name = cleaned; renderSheetTabs(); schedulePreview();
   }
   $("renameSheetBtn").onclick = renameActiveSheet;
   $("removeSheetBtn").onclick = () => {
@@ -756,7 +756,8 @@
     const body = {
       id: sessionId, columns: columns.filter(c => selected.has(c) || LOCKED.has(c)),
       filters: activeFilters(), mode: root.mode,
-      renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS
+      renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS,
+      sheet: outputSheets[activeSheetIndex]?.name || ""      // not used by the server; makes the caption refresh when the sheet is renamed / another identical sheet is selected
     };
     const key = JSON.stringify(body);
     if (key === pvKey) return;
