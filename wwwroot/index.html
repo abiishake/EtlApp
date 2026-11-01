@@ -262,6 +262,27 @@
   table.pv tr:last-child td { border-bottom:0; }
   .pvempty { border:1px dashed var(--color-border-strong); border-radius:8px; padding:28px; text-align:center; color:var(--color-text-muted); }
 
+  /* Shared Preview workspace */
+  #savedBox { border:1px solid var(--color-border); border-radius:6px; background:var(--color-surface-muted); }
+  #savedToggle { display:flex; align-items:center; gap:8px; width:100%; height:auto; min-height:36px; padding:8px 12px; text-align:left; border:0; background:transparent; }
+  #savedToggle .chevron { margin-left:auto; transition:transform var(--t); }
+  #savedToggle[aria-expanded="true"] .chevron { transform:rotate(90deg); }
+  #savedContent { padding:0 12px 10px; }
+  #savedSearch { max-width:100%; }
+  .pvactions { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .pvactions button[aria-expanded="true"] { background:var(--color-accent-soft); border-color:var(--color-accent); color:var(--color-accent); }
+  .pvpanel { border-block:1px solid var(--color-border); padding:12px 0; margin-bottom:12px; }
+  .pvpanelhead { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .pvpanelhead h3 { margin:0; font-size:14px; }
+  .pvpanel .subsec { margin-top:8px; }
+  .pvsummary { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  #pvFilterSummary { flex:1; min-width:120px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--color-text-muted); }
+  #pvCounts { display:flex; flex-wrap:wrap; gap:8px 18px; font-variant-numeric:tabular-nums; margin-bottom:8px; }
+  .pvhome { padding:8px 0; color:var(--color-text-muted); }
+  table.pv th .header-sort { border:0; background:transparent; padding:0; height:28px; font-weight:600; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
+  table.pv th .header-rename { margin-left:6px; width:24px; height:24px; padding:0; }
+  @media (max-width:640px) { .appbar { height:auto; min-height:56px; flex-wrap:wrap; padding-block:8px; } .brand { white-space:normal; } .srow select:first-of-type { min-width:0; max-width:100%; } .frow { grid-template-columns:minmax(0,1fr); } .frow > * { max-width:100%; } .fhint { grid-column:1; } }
+
   /* ================================================================ sticky export bar */
   .dl { position:fixed; left:0; right:0; bottom:0; z-index:30; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
         padding:10px 20px; background:var(--color-surface); border-top:1px solid var(--color-border); box-shadow:var(--shadow-float); }
@@ -321,6 +342,7 @@
   <section id="sheetCard" class="card hidden">
     <h2><span class="step">2</span>Output worksheets</h2>
     <p class="help">Each tab is one worksheet in the exported workbook, with its own filters, columns and sorting. Pick a tab, then use the steps below.</p>
+    <div id="sheetControls">
     <div class="row setupbar">
       <strong style="font-size:13px">Saved setups</strong>
       <select id="workflowList" aria-label="Saved setups"><option value="">Select saved sheets…</option></select>
@@ -337,9 +359,11 @@
       <button id="removeSheetBtn" class="danger">Remove sheet</button>
       <span class="opt" style="font-size:12px">Tip: double-click a tab to rename it; use ← → to move between tabs.</span>
     </div><div id="workflowStatus" class="status" role="status" aria-live="polite"></div>
+    </div>
   </section>
 
   <section id="filterCard" class="card hidden">
+    <div id="filterControls">
     <div class="row" style="justify-content:space-between;gap:12px;margin-bottom:10px">
       <h2 style="margin:0"><span class="step">3</span>Filter data <span class="opt">&nbsp;(optional)</span><span class="badge editing-badge"></span></h2>
       <div class="row">
@@ -347,12 +371,14 @@
         <input type="text" id="saveName" class="hidden" maxlength="100" placeholder="Filter name (required)" aria-label="Filter name" style="width:220px">
       </div>
     </div>
-    <details id="savedBox" class="hidden" open style="margin:0 0 14px">
-      <summary>Saved filters from earlier downloads (<span id="savedCount">0</span>)</summary>
+    <div id="savedBox" style="margin:0 0 14px">
+      <button id="savedToggle" type="button" aria-expanded="false" aria-controls="savedContent"><span>Saved filters from earlier downloads</span><span class="badge" id="savedCount">0</span><span class="chevron" aria-hidden="true">›</span></button>
+      <div id="savedContent" hidden>
       <input type="search" id="savedSearch" placeholder="Search saved filters…" aria-label="Search saved filters" style="margin-top:8px;width:280px" class="hidden">
       <div id="savedList"></div>
       <div id="savedMsg" class="status" style="margin-top:6px" role="status" aria-live="polite"></div>
-    </details>
+      </div>
+    </div>
     <p id="noFilters" class="empty">No conditions: all rows will be exported.</p>
     <div id="filters"></div>
     <div class="row" style="margin-top:8px">
@@ -363,10 +389,12 @@
     </div>
     <div id="filterSummary" class="fsum"></div>
     <div id="filterErr" class="status err"></div>
+    </div>
   </section>
 
   <section id="pick" class="card hidden">
     <h2><span class="step">4</span>Select columns<span class="badge editing-badge"></span></h2>
+    <div id="columnControls">
     <div class="row">
       <input id="search" type="search" placeholder="Search columns…" aria-label="Search columns">
       <button id="allBtn">Select all</button>
@@ -375,15 +403,16 @@
       <span id="count" class="count"></span>
     </div>
     <div id="cols"></div>
+    </div>
 
-    <div class="subsec">
+    <div id="orderControls" class="subsec">
       <h3>Column order</h3>
       <p class="help" style="margin:0">Drag a column, or use the arrows, to set the order of columns in the exported sheet.
         <button id="resetOrder" class="mini">Reset to original order</button></p>
       <ol id="orderList" class="olist" aria-label="Column order"></ol>
     </div>
 
-    <div class="subsec">
+    <div id="sortControls" class="subsec">
       <h3>Sort rows <span class="opt">(optional)</span></h3>
       <p class="help" style="margin:0 0 8px">Sort by one column, or add more to break ties (e.g. by Country, then by Age). Blank cells always go last.</p>
       <div id="sortList"></div>
@@ -395,6 +424,17 @@
   <section id="previewCard" class="card hidden">
     <h2><span class="step">5</span>Preview &amp; export<span class="badge editing-badge"></span></h2>
     <p class="help">The first rows of the active worksheet, exactly as they will be exported. Column headers show the output name; the original name appears underneath when renamed.</p>
+    <div class="pvactions" role="group" aria-label="Preview configuration">
+      <button type="button" data-pv-panel="filter" aria-expanded="false" aria-controls="pvPanel">⌕ Filter</button>
+      <button type="button" data-pv-panel="sort" aria-expanded="false" aria-controls="pvPanel">↕ Sort</button>
+      <button type="button" data-pv-panel="columns" aria-expanded="false" aria-controls="pvPanel">☷ Columns</button>
+      <button type="button" data-pv-panel="rename" aria-expanded="false" aria-controls="pvPanel">✎ Rename</button>
+      <button type="button" data-pv-panel="sheets" aria-expanded="false" aria-controls="pvPanel">▤ Sheets &amp; setups</button>
+      <button type="button" data-pv-panel="more" aria-expanded="false" aria-controls="pvPanel">⋯ More</button>
+    </div>
+    <div class="pvsummary"><span id="pvFilterSummary" title="No filters applied">No filters applied</span><button id="pvEditFilters" class="mini">Add filter</button><button id="pvClearFilters" class="mini">Clear</button></div>
+    <div id="pvCounts" role="status" aria-live="polite"></div>
+    <div id="pvPanel" class="pvpanel" hidden><div class="pvpanelhead"><h3 id="pvPanelTitle"></h3><button id="pvClosePanel" type="button" aria-label="Close Preview configuration">✕ Close</button></div><div id="pvPanelBody"></div></div>
     <div class="pvtool"><div id="pvStatus" class="status" role="status" aria-live="polite"></div></div>
     <div id="pvTable" class="pvwrap"></div>
     <div id="pvTabs" class="sheetbar" role="tablist" aria-label="Worksheet being previewed"></div>
@@ -453,7 +493,21 @@
   const ensureLocked = () => LOCKED.forEach(c => { if (columns.includes(c)) selected.add(c); });
   // a saved order may miss new columns or contain gone ones: keep the known ones, append the rest in file order
   const normOrder = o => { const have = new Set(columns), seen = new Set(); const out = (o || []).filter(c => have.has(c) && !seen.has(c) && seen.add(c)); return out.concat(columns.filter(c => !seen.has(c))); };
-  const normSorts = list => (list || []).filter(x => x && columns.includes(x.column)).map(x => ({ column: x.column, dir: x.dir === "desc" ? "desc" : "asc" }));
+  const normSorts = list => {
+    const seen = new Set();
+    return (Array.isArray(list) ? list : []).filter(x => x && columns.includes(x.column) && !seen.has(x.column) && seen.add(x.column))
+      .map(x => ({ column: x.column, dir: x.dir === "desc" ? "desc" : "asc" }));
+  };
+  // The full order remembers excluded columns too; columns newly added to the source are included by default.
+  const restoreSelection = (saved, savedOrder) => {
+    selected.clear();
+    (Array.isArray(saved) ? saved : columns).forEach(c => { if (columns.includes(c)) selected.add(c); });
+    if (Array.isArray(savedOrder)) {
+      const known = new Set([...savedOrder, ...(Array.isArray(saved) ? saved : [])]);
+      columns.forEach(c => { if (!known.has(c)) selected.add(c); });
+    }
+    ensureLocked();
+  };
   const chosenCols = () => order.filter(c => selected.has(c) || LOCKED.has(c));
   const fmt = n => Number(n).toLocaleString();
   let srcFile = "", srcSheet = "";
@@ -485,6 +539,8 @@
     if (sessionId && (outputSheets.length > 1 || activeFilters().length > 0) &&
         !confirm("Uploading a new file resets your current sheets and filters. Continue?")) return;
 
+    closePreviewPanel(false);
+    $("savedContent").hidden = true; $("savedToggle").setAttribute("aria-expanded", "false");
     $("uploadBtn").disabled = true;
     $("pick").classList.add("hidden");
     $("previewCard").classList.add("hidden");
@@ -540,7 +596,7 @@
       $("filterCard").classList.remove("hidden");
       $("pick").classList.remove("hidden");
       $("previewCard").classList.remove("hidden");
-      pvKey = ""; schedulePreview(); updateStepper();
+      pvKey = ""; pvPendingKey = ""; pvResult = null; ++pvNo; ++reqNo; countPending = false; schedulePreview(); updateStepper();
     } catch (e) {
       setStatus($("status"), e.message + " Check the file and try again.", "err"); setPill("failed", "Upload failed");
     } finally {
@@ -564,7 +620,7 @@
     restoringSheet = true;
     const st = sh.state;
     root = st ? cleanRoot(st.root, []) : { mode: "and", items: [] };   // never restore filters on columns this file does not have
-    selected.clear(); (st?.selected || columns).forEach(c => { if (columns.includes(c)) selected.add(c); }); ensureLocked();
+    restoreSelection(st?.selected, st?.order);
     renames = st ? { ...st.renames } : {};
     order = normOrder(st?.order); sorts = normSorts(st?.sorts);
     $("renameToggle").checked = st?.renameEnabled || false;
@@ -655,7 +711,8 @@
     const workflow = { name, fileName: $("fileName").value, sheets: outputSheets.map(x => ({ name: x.name, state: x.state })) };
     const i = saved.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
     if (i >= 0) saved[i] = workflow; else saved.push(workflow);
-    try { localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); } catch { /* storage full / blocked: the download must still work */ }
+    try { localStorage.setItem(WORKFLOW_KEY, JSON.stringify(saved)); }
+    catch { setStatus($("workflowStatus"), "Could not save the setup in this browser. Your settings are still here; free browser storage or allow storage, then retry Save current setup.", "err"); return null; }
     refreshWorkflowList(); $("workflowList").value = name;
     $("setupName").value = name;
     return name;
@@ -677,6 +734,7 @@
   };
   $("saveWorkflowBtn").onclick = () => {
     const name = saveCurrentWorkflow();
+    if (!name) return;
     setStatus($("workflowStatus"), `Saved the current sheets as “${name}” (stored in this browser).`, "ok");
   };
   $("deleteWorkflowBtn").onclick = () => {
@@ -747,7 +805,9 @@
     const rm = el("button", "x", "✕");
     rm.title = "Remove group"; rm.setAttribute("aria-label", "Remove " + title.toLowerCase());
     rm.onclick = () => { parent.items.splice(parent.items.indexOf(g), 1); renderFilters(); scheduleCount(); };
-    head.append(sel, addF, rm);
+    const addG = el("button", "mini", "+ Add sub-group");
+    addG.onclick = () => { g.items.push({ mode: "and", items: [newFilter()] }); renderFilters(); };
+    head.append(sel, addF, addG, rm);
     box.append(head);
     if (g.items.length === 0) box.append(el("p", "gempty", "Empty group: add a condition."));
     g.items.forEach((n, i) => box.append(n.items ? renderGroup(n, g, "Sub-group") : renderFilter(n, g)));
@@ -815,7 +875,7 @@
       const res = await fetch("/api/saved-filters");
       if (!res.ok) throw new Error();
       savedFilters = await res.json();
-    } catch { savedFilters = []; }
+    } catch { savedFilters = []; setStatus($("savedMsg"), "Saved filters could not be loaded. Try uploading again or retrying after a download.", "err"); }
     renderSaved();
   }
 
@@ -849,7 +909,7 @@
 
   function renderSaved() {
     $("savedCount").textContent = savedFilters.length;
-    $("savedBox").classList.toggle("hidden", savedFilters.length === 0);
+    $("savedBox").classList.remove("hidden");
     $("savedSearch").classList.toggle("hidden", savedFilters.length < 6);
     const sq = $("savedSearch").value.trim().toLowerCase();
     const shownSaved = sq ? savedFilters.filter(sf => [sf.name, sf.fileName, summarize(sf.filters, sf.mode)].some(x => String(x || "").toLowerCase().includes(sq))) : savedFilters;
@@ -878,6 +938,7 @@
       row.append(meta, use, del);
       return row;
     }));
+    if (!shownSaved.length) $("savedList").append(el("p", "empty", savedFilters.length ? "No saved filters match your search." : "No saved filters yet."));
   }
 
   function applySaved(sf) {
@@ -899,10 +960,8 @@
       const keep = sf.columns.filter(c => have.has(c));
       colsMissing.push(...sf.columns.filter(c => !have.has(c)));
       if (keep.length) {
-        selected.clear();
-        keep.forEach(c => selected.add(c));
-        ensureLocked();
-        order = normOrder(keep);              // saved columns come in their saved order
+        restoreSelection(keep, sf.columnOrder);
+        order = normOrder(sf.columnOrder || keep);              // saved columns come in their saved order
         renames = {};
         Object.entries(sf.renames || {}).forEach(([c, n]) => { if (selected.has(c) && n) renames[c] = n; });
         $("renameToggle").checked = Object.keys(renames).length > 0;
@@ -910,7 +969,8 @@
       } else colsMissing.push("(none of the saved columns exist in this file, kept the current selection)");
     }
 
-    renderFilters(); scheduleCount();
+    sorts = normSorts(sf.sorts); // legacy entries have no sorts: use normal unsorted behavior
+    renderSorts(); renderFilters(); scheduleCount();
     const warn = [];
     if (skipped.length) warn.push(`skipped filters on missing/incompatible columns: ${[...new Set(skipped)].join(", ")}`);
     if (colsMissing.length) warn.push(`columns not found: ${colsMissing.join(", ")}`);
@@ -920,8 +980,8 @@
   }
 
   // live "N of M rows match" (debounced; ignores out-of-date answers)
-  let timer = null, reqNo = 0;
-  function scheduleCount() { clearTimeout(timer); timer = setTimeout(runCount, 250); }
+  let timer = null, reqNo = 0, countPending = false;
+  function scheduleCount() { ++reqNo; countPending = true; clearTimeout(timer); refresh(); timer = setTimeout(runCount, 250); }
 
   async function runCount() {
     const mine = ++reqNo;
@@ -939,7 +999,7 @@
       if (mine !== reqNo) return;
       filterError = e.message; matchCount = null;
     }
-    refresh();
+    countPending = false; refresh();
   }
 
   // ------------------------------------------------------------------ column picker
@@ -961,7 +1021,7 @@
       rn.setAttribute("aria-label", "Output name for " + c);
       rn.value = renames[c] || "";
       rn.onclick = e => { e.stopPropagation(); e.preventDefault(); rn.focus(); };
-      rn.oninput = () => { const v = rn.value.trim(); if (v) renames[c] = v; else delete renames[c]; captureSheet(); schedulePreview(); };
+      rn.oninput = () => { const v = rn.value.trim(); if (v) renames[c] = v; else delete renames[c]; captureSheet(); renderOrder(); schedulePreview(); };
       label.append(rn);
     } else label.append(el("span", "outname", c));
     const t = byName[c]?.type;
@@ -1071,19 +1131,21 @@
   $("clearSort").onclick = () => { sorts = []; renderSorts(); refresh(); };
 
   // ------------------------------------------------------------------ preview (first rows of the active sheet)
-  let pvTimer = null, pvKey = "", pvNo = 0;
-  function schedulePreview() { clearTimeout(pvTimer); pvTimer = setTimeout(runPreview, 400); }
+  let pvTimer = null, pvKey = "", pvPendingKey = "", pvNo = 0, pvResult = null;
+  const previewBody = () => ({ id: sessionId, columns: chosenCols(), filters: activeFilters(), mode: root.mode, sorts,
+    renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS, sheet: outputSheets[activeSheetIndex]?.name || "" });
+  function schedulePreview() {
+    if (!sessionId) return;
+    const key = JSON.stringify(previewBody());
+    updatePreviewWorkspace(key !== pvKey);
+    if (key === pvKey || key === pvPendingKey) return;
+    ++pvNo; pvPendingKey = ""; clearTimeout(pvTimer); pvTimer = setTimeout(runPreview, 400);
+  }
   async function runPreview() {
     if (!sessionId) return;
-    const body = {
-      id: sessionId, columns: chosenCols(),
-      filters: activeFilters(), mode: root.mode, sorts,
-      renames: $("renameToggle").checked ? renames : {}, limit: PREVIEW_ROWS,
-      sheet: outputSheets[activeSheetIndex]?.name || ""      // not used by the server; makes the caption refresh when the sheet is renamed / another identical sheet is selected
-    };
-    const key = JSON.stringify(body);
-    if (key === pvKey) return;
-    pvKey = key;
+    const key = JSON.stringify(previewBody());
+    if (key === pvKey || key === pvPendingKey) return;
+    pvPendingKey = key;
     const mine = ++pvNo;
     setStatus($("pvStatus"), "Loading preview…");
     try {
@@ -1091,18 +1153,22 @@
       const d = await readJson(res);
       if (mine !== pvNo) return;
       if (!res.ok) throw new Error(d.error || `Preview failed (HTTP ${res.status}).`);
-      renderPreview(d);
+      pvKey = key; pvPendingKey = ""; pvResult = d;
+      renderPreview(d); updatePreviewWorkspace(false);
     } catch (e) {
       if (mine !== pvNo) return;
-      pvKey = ""; $("pvTable").replaceChildren();
-      setStatus($("pvStatus"), "Preview could not be generated: " + e.message + " Review the settings and try again.", "err");
+      pvKey = ""; pvPendingKey = "";
+      setStatus($("pvStatus"), "Preview could not be generated: " + e.message + (pvResult ? " The grid retains the last successful preview." : " Review the settings and try again."), "err");
+      updatePreviewWorkspace(true);
     }
   }
   function renderPreview(d) {
     const box = $("pvTable");
     if (!d.rows.length) {
       box.replaceChildren();
-      return setStatus($("pvStatus"), d.total === 0 && totalRows === 0 ? "This worksheet has no previewable rows." : "No rows match these filters. Try changing or clearing a condition.");
+      const empty = el("div", "pvempty", d.total === 0 && totalRows === 0 ? "This worksheet has no previewable rows." : "No rows match these filters.");
+      const edit = el("button", "mini", "Edit filters"); edit.onclick = () => openPreviewPanel("filter"); empty.append(document.createTextNode(" "), edit); box.append(empty);
+      return setStatus($("pvStatus"), "Showing 0 of " + fmt(d.total) + " matching rows.");
     }
     const t = el("table", "pv"), thead = el("thead"), hr = el("tr"), tb = el("tbody");
     // headers come back in the same order as the columns sent (chosenCols); map them back to know sort / rename / type
@@ -1110,7 +1176,14 @@
     const corner = el("th", "rn", "#"); corner.setAttribute("aria-label", "Row"); hr.append(corner);
     const numeric = d.headers.map((h, i) => mapped && byName[cols[i]]?.type === "number");
     d.headers.forEach((h, i) => {
-      const th = el("th", null, h), src = mapped ? cols[i] : null;
+      const th = el("th"), src = mapped ? cols[i] : null;
+      if (src) {
+        const sort = el("button", "header-sort", h); sort.type = "button"; sort.title = "Toggle sort for " + src; sort.setAttribute("aria-label", "Toggle sort for " + src);
+        sort.onclick = () => { const level = sorts.findIndex(x => x.column === src); if (level < 0) sorts.push({ column: src, dir: "asc" }); else if (sorts[level].dir === "asc") sorts[level].dir = "desc"; else sorts.splice(level, 1); renderSorts(); refresh(); };
+        const rename = el("button", "header-rename", "✎"); rename.type = "button"; rename.title = "Rename output column " + src; rename.setAttribute("aria-label", "Rename output column " + src);
+        rename.onclick = () => { openPreviewPanel("rename"); const input = [...$("cols").querySelectorAll("input.rn")].find(n => n.getAttribute("aria-label") === "Output name for " + src); input?.focus(); input?.select(); };
+        th.append(sort, rename);
+      } else th.textContent = h;
       th.scope = "col";
       if (src && src !== h) { th.append(el("small", null, "from " + src)); th.title = `Output name “${h}”, original column “${src}”`; }
       const si = src ? sorts.findIndex(x => x.column === src) : -1;
@@ -1123,7 +1196,7 @@
       hr.append(th);
     });
     thead.append(hr);
-    d.rows.forEach((r, ri) => {
+    d.rows.slice(0, PREVIEW_ROWS).forEach((r, ri) => {
       const tr = el("tr"); tr.append(el("td", "rn", ri + 1));
       r.forEach((v, i) => { const td = el("td", numeric[i] ? "num" : null, v); td.title = v; tr.append(td); });
       tb.append(tr);
@@ -1131,7 +1204,49 @@
     t.append(thead, tb);
     box.replaceChildren(t);
     const sortTxt = sorts.length ? ` Sorted by ${sorts.map(x => `${x.column} (${x.dir === "desc" ? "descending" : "ascending"})`).join(", then ")}.` : "";
-    setStatus($("pvStatus"), `Showing the first ${d.rows.length} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.${sortTxt}`);
+    setStatus($("pvStatus"), `Showing the first ${Math.min(d.rows.length, PREVIEW_ROWS)} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.${sortTxt}`);
+  }
+
+  // One live set of controls: move to Preview while open, restore on close.
+  const panelSources = { filter: ["filterControls"], sort: ["sortControls"], columns: ["columnControls", "orderControls"], rename: ["columnControls", "orderControls"], sheets: ["sheetControls"], more: ["notes"] };
+  const panelTitles = { filter: "Filter data", sort: "Sort rows", columns: "Columns & order", rename: "Rename output columns", sheets: "Sheets & saved setups", more: "Review & workbook actions" };
+  let previewPanel = null, movedControls = [], panelTrigger = null;
+  function closePreviewPanel(focus = true) {
+    movedControls.forEach(({ node, home, message }) => { home.replaceWith(node); message.remove(); }); movedControls = [];
+    $("pvPanelBody").replaceChildren(); $("pvPanel").hidden = true; previewPanel = null;
+    document.querySelectorAll("[data-pv-panel]").forEach(b => b.setAttribute("aria-expanded", "false"));
+    if (focus) panelTrigger?.focus();
+  }
+  function openPreviewPanel(name) {
+    closePreviewPanel(false); previewPanel = name;
+    panelTrigger = document.querySelector(`[data-pv-panel="${name}"]`);
+    panelTrigger?.setAttribute("aria-expanded", "true");
+    $("pvPanelTitle").textContent = panelTitles[name]; $("pvPanel").hidden = false;
+    if (name === "rename") { $("renameToggle").checked = true; $("search").value = ""; renderColumns(); }
+    for (const id of panelSources[name] || []) {
+      const node = $(id), home = document.createComment("Preview control home"), message = el("div", "pvhome");
+      const back = el("button", "mini", "Edit here"); back.onclick = () => { closePreviewPanel(false); node.scrollIntoView({ block: "start" }); node.querySelector("button,input,select")?.focus(); };
+      message.append(document.createTextNode("Currently open in Preview. "), back); node.before(home, message); $("pvPanelBody").append(node); movedControls.push({ node, home, message });
+    }
+    if (name === "more") {
+      const upload = el("button", null, "Upload another workbook"); upload.onclick = () => { closePreviewPanel(false); $("uploadCard").scrollIntoView({ block: "start" }); $("file").focus(); };
+      $("pvPanelBody").append(upload);
+      if ($("notes").classList.contains("hidden")) $("pvPanelBody").append(el("p", "empty", "No transformation changes reported for this upload."));
+    }
+  }
+  document.querySelectorAll("[data-pv-panel]").forEach(b => b.onclick = () => previewPanel === b.dataset.pvPanel ? closePreviewPanel() : openPreviewPanel(b.dataset.pvPanel));
+  $("pvClosePanel").onclick = () => closePreviewPanel();
+  $("pvPanel").addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); closePreviewPanel(); } });
+  $("savedToggle").onclick = () => { const expanded = $("savedToggle").getAttribute("aria-expanded") !== "true"; $("savedToggle").setAttribute("aria-expanded", String(expanded)); $("savedContent").hidden = !expanded; };
+  $("pvEditFilters").onclick = () => openPreviewPanel("filter");
+  $("pvClearFilters").onclick = () => $("clearFilters").click();
+  function updatePreviewWorkspace(pending) {
+    const af = activeFilters(), summary = af.length ? summarize(af, root.mode) : "No filters applied";
+    $("pvFilterSummary").textContent = summary; $("pvFilterSummary").title = summary;
+    $("pvEditFilters").textContent = af.length ? "Edit filters" : "Add filter"; $("pvClearFilters").disabled = !root.items.length;
+    const matching = countPending ? "Recalculating…" : filterError ? "Unavailable" : matchCount == null ? "—" : fmt(matchCount);
+    const shown = pending ? "Updating…" : pvResult ? `${Math.min(pvResult.rows.length, PREVIEW_ROWS)} of ${fmt(pvResult.total)}` : "Loading…";
+    $("pvCounts").replaceChildren(el("span", null, `Total rows: ${fmt(totalRows)}`), el("span", null, `Matching rows: ${matching}`), el("span", null, `Showing: ${shown}`));
   }
 
   // ------------------------------------------------------------------ step bar
@@ -1139,6 +1254,7 @@
   STEP_LIS.forEach(li => {
     li.onclick = () => {
       const s = $(li.dataset.target);
+      if (li.dataset.target !== "previewCard") closePreviewPanel(false);
       if (!s.classList.contains("hidden")) s.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     };
     li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); li.click(); } };
@@ -1167,7 +1283,7 @@
     if (outputSheets.length && !restoringSheet) captureSheet();
     $("count").textContent = `${selected.size} of ${columns.length} selected`;
     $("filterErr").textContent = filterError;
-    $("matchCount").textContent = matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows match`;
+    $("matchCount").textContent = countPending ? "Recalculating…" : matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows match`;
 
     const hasFilters = activeFilters().length > 0;
     $("saveFilters").disabled = !hasFilters;
@@ -1177,7 +1293,7 @@
     const af = activeFilters();
     $("filterSummary").replaceChildren(...(af.length ? [el("b", null, "Keeping rows where: "), document.createTextNode(summarize(af, root.mode))] : []));
     updateSummary();
-    $("downloadBtn").disabled = matchCount == null || matchCount === 0;
+    $("downloadBtn").disabled = countPending || matchCount == null || matchCount === 0;
     setStatus($("dlStatus"),
       matchCount === 0 ? "Export unavailable: no rows match the filters on this sheet."
       : matchCount == null ? (filterError ? "Export unavailable: fix the filter error first." : "")
@@ -1211,7 +1327,7 @@
         const rootState = st.root || { mode: "and", items: [] };
         const sel = new Set(st.selected || columns);
         const cols = normOrder(st.order).filter(c => sel.has(c) || LOCKED.has(c));
-        return { sheetName: sh.name, columns: cols, sorts: normSorts(st.sorts), filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renameEnabled === false ? {} : (st.renames || {}), saveFilters: !!st.saveFilters && cleanItems(rootState.items).length > 0, filterName: (st.saveName || "").trim() };
+        return { sheetName: sh.name, columns: cols, columnOrder: normOrder(st.order), sorts: normSorts(st.sorts), filters: cleanItems(rootState.items), mode: rootState.mode || "and", renames: st.renameEnabled === false ? {} : (st.renames || {}), saveFilters: !!st.saveFilters && cleanItems(rootState.items).length > 0, filterName: (st.saveName || "").trim() };
       });
       const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
       if (missingFilterName) {
@@ -1237,13 +1353,14 @@
       refresh(); loadSaved(); refreshWorkflowList();
       const failed = parseInt(res.headers.get("X-Filters-Save-Failed") || "0", 10);
       setStatus($("dlStatus"), failed > 0
-        ? `Downloaded, but ${failed} filter(s) could not be remembered on the server. The setup “${workflowName}” is still saved in this browser.`
-        : `Downloaded all sheets. Setup “${workflowName}” saved with each sheet’s filters and columns.`, failed > 0 ? "err" : "ok");
-      setPill(failed > 0 ? "warn" : "done", failed > 0 ? "Exported with warnings" : "Exported");
+        ? `Downloaded, but ${failed} filter(s) could not be remembered on the server.` + (workflowName ? ` The setup “${workflowName}” is still saved in this browser.` : " The browser setup could not be saved either; your current settings are still available.")
+        : workflowName ? `Downloaded all sheets. Setup “${workflowName}” saved with each sheet’s filters and columns.`
+        : "Downloaded all sheets, but the browser setup could not be saved. Your current settings are still available; retry Save current setup.", failed > 0 || !workflowName ? "err" : "ok");
+      setPill(failed > 0 || !workflowName ? "warn" : "done", failed > 0 || !workflowName ? "Exported with warnings" : "Exported");
     } catch (e) {
       setStatus($("dlStatus"), e.message, "err"); setPill("failed", "Export failed");
     } finally {
-      $("downloadBtn").disabled = matchCount == null || matchCount === 0;
+      $("downloadBtn").disabled = countPending || matchCount == null || matchCount === 0;
     }
   };
 

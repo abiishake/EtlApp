@@ -152,7 +152,7 @@ app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterS
             var keptRenames = new Dictionary<string, string>();       // only columns that actually got a new header
             for (var i = 0; i < columns.Count; i++)
                 if (headers[i] != columns[i]) keptRenames[columns[i]] = headers[i];
-            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, columns, keptRenames); savedOk = true; }
+            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, columns, keptRenames, body.Sorts, body.ColumnOrder); savedOk = true; }
             catch (Exception ex) { log.LogWarning(ex, "Could not save filters"); }
         }
         http.Response.Headers["X-Filters-Saved"] = savedOk ? "1" : "0";
@@ -185,7 +185,7 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
 
         var exports = new List<ExcelIo.SheetExport>();
         // filters are remembered only after the workbook was built successfully (a failed export must not leave half-saved filters)
-        var pendingSaves = new List<(string Name, string Label, string Mode, List<FilterSpec> Filters, List<string> Columns, Dictionary<string, string> Renames)>();
+        var pendingSaves = new List<(string Name, string Label, string Mode, List<FilterSpec> Filters, List<string> Columns, Dictionary<string, string> Renames, List<SortSpec>? Sorts, List<string>? ColumnOrder)>();
         foreach (var sheet in body.Sheets)
         {
             var cols = OrderedColumns(data.Columns, sheet.Columns);
@@ -211,7 +211,7 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
                     var keptRenames = new Dictionary<string, string>();
                     for (var i = 0; i < cols.Count; i++)
                         if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
-                    pendingSaves.Add((filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames));
+                    pendingSaves.Add((filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames, sheet.Sorts, sheet.ColumnOrder));
                 }
             }
         }
@@ -219,7 +219,7 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
         var failedSaves = 0;
         foreach (var ps in pendingSaves)
         {
-            try { saved.Save(ps.Name, ps.Label, ps.Mode, ps.Filters, ps.Columns, ps.Renames); }
+            try { saved.Save(ps.Name, ps.Label, ps.Mode, ps.Filters, ps.Columns, ps.Renames, ps.Sorts, ps.ColumnOrder); }
             catch (Exception ex) { failedSaves++; log.LogWarning(ex, "Could not save filters '{FilterName}'", ps.Name); }
         }
         if (pendingSaves.Count > 0) http.Response.Headers["X-Filters-Save-Failed"] = failedSaves.ToString();   // the page shows a warning when > 0
@@ -304,11 +304,11 @@ app.Run();
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
 record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit, List<SortSpec>? Sorts);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts);
+record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts, List<string>? ColumnOrder = null);
 
 record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
-record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts);
-record SortSpec(string? Column, string? Dir);
+record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts, List<string>? ColumnOrder = null);
+public sealed record SortSpec(string? Column, string? Dir);
 
 // Compares cell values for sorting: blanks last (in both directions), then numbers, dates, booleans, text (case-insensitive).
 sealed class CellComparer(bool desc) : IComparer<object?>

@@ -8,7 +8,8 @@ namespace EtlApp.Etl;
 /// <param name="Renames">Original column name -> header used in the export (only the renamed ones).</param>
 public sealed record SavedFilter(
     long Id, string Name, string FileName, string Mode, List<FilterSpec> Filters, DateTime SavedAt,
-    List<string>? Columns, Dictionary<string, string>? Renames);
+    List<string>? Columns, Dictionary<string, string>? Renames,
+    List<SortSpec>? Sorts = null, List<string>? ColumnOrder = null);
 
 /// <summary>
 /// Remembers the filters (plus selected / renamed columns) used for a download in a single SQLite file (DATA_DIR/etl.db).
@@ -41,7 +42,9 @@ public sealed class SavedFilterStore
             filters_json TEXT NOT NULL,
             saved_at     TEXT NOT NULL,
             columns_json TEXT NULL,
-            renames_json TEXT NULL)";
+            renames_json TEXT NULL,
+            sorts_json TEXT NULL,
+            column_order_json TEXT NULL)";
 
     static List<string> TableColumns(SqliteConnection conn)
     {
@@ -83,7 +86,7 @@ public sealed class SavedFilterStore
 
         // upgrade from the second version (name, but no stored columns / renames)
         cols = TableColumns(conn);
-        foreach (var extra in new[] { "columns_json", "renames_json" })
+        foreach (var extra in new[] { "columns_json", "renames_json", "sorts_json", "column_order_json" })
         {
             if (cols.Contains(extra)) continue;
             using var alter = conn.CreateCommand();
@@ -138,15 +141,17 @@ public sealed class SavedFilterStore
     }
 
     public void Save(string name, string fileName, string mode, List<FilterSpec> filters,
-                     List<string> columns, Dictionary<string, string> renames)
+                     List<string> columns, Dictionary<string, string> renames,
+                     List<SortSpec>? sorts = null, List<string>? columnOrder = null)
     {
         using var conn = Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"INSERT INTO saved_filters (name, file_name, mode, filters_json, saved_at, columns_json, renames_json)
-            VALUES ($name, $n, $m, $f, $t, $c, $r)
+        cmd.CommandText = @"INSERT INTO saved_filters (name, file_name, mode, filters_json, saved_at, columns_json, renames_json, sorts_json, column_order_json)
+            VALUES ($name, $n, $m, $f, $t, $c, $r, $s, $o)
             ON CONFLICT(name) DO UPDATE SET
                 file_name = excluded.file_name, mode = excluded.mode, filters_json = excluded.filters_json,
-                saved_at = excluded.saved_at, columns_json = excluded.columns_json, renames_json = excluded.renames_json";
+                saved_at = excluded.saved_at, columns_json = excluded.columns_json, renames_json = excluded.renames_json,
+                sorts_json = excluded.sorts_json, column_order_json = excluded.column_order_json";
         cmd.Parameters.AddWithValue("$name", name);
         cmd.Parameters.AddWithValue("$n", fileName);
         cmd.Parameters.AddWithValue("$m", mode);
@@ -154,6 +159,8 @@ public sealed class SavedFilterStore
         cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
         cmd.Parameters.AddWithValue("$c", JsonSerializer.Serialize(columns));
         cmd.Parameters.AddWithValue("$r", JsonSerializer.Serialize(renames));
+        cmd.Parameters.AddWithValue("$s", JsonSerializer.Serialize(sorts ?? new List<SortSpec>()));
+        cmd.Parameters.AddWithValue("$o", JsonSerializer.Serialize(columnOrder ?? columns));
         cmd.ExecuteNonQuery();
     }
 
@@ -161,7 +168,7 @@ public sealed class SavedFilterStore
     {
         using var conn = Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"SELECT id, name, file_name, mode, filters_json, saved_at, columns_json, renames_json
+        cmd.CommandText = @"SELECT id, name, file_name, mode, filters_json, saved_at, columns_json, renames_json, sorts_json, column_order_json
                             FROM saved_filters ORDER BY saved_at DESC";
         using var r = cmd.ExecuteReader();
         var list = new List<SavedFilter>();
@@ -171,7 +178,9 @@ public sealed class SavedFilterStore
             var at = DateTime.Parse(r.GetString(5), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
             var cols = r.IsDBNull(6) ? null : JsonSerializer.Deserialize<List<string>>(r.GetString(6));
             var renames = r.IsDBNull(7) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(r.GetString(7));
-            list.Add(new SavedFilter(r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3), filters, at, cols, renames));
+            var sorts = r.IsDBNull(8) ? null : JsonSerializer.Deserialize<List<SortSpec>>(r.GetString(8));
+            var columnOrder = r.IsDBNull(9) ? null : JsonSerializer.Deserialize<List<string>>(r.GetString(9));
+            list.Add(new SavedFilter(r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3), filters, at, cols, renames, sorts, columnOrder));
         }
         return list;
     }
