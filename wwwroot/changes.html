@@ -70,6 +70,7 @@
   button:disabled { opacity:.5; cursor:not-allowed; }
   .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 </style>
+<script src="auth.js?v=1"></script>
 </head>
 <body>
 <header class="appbar">
@@ -81,7 +82,7 @@
   </button>
 </header>
 <main>
-  <p><a href="/">← Back to the ETL</a></p>
+  <p><a id="cleanupBack" href="cleanup.html">← Clean-up rules</a></p>
   <h1>Changed records</h1>
   <p class="sub" id="sub">Every cell the clean-up changed, shown as original → new.</p>
 
@@ -187,6 +188,7 @@
 
   (async () => {
     if (file) $("sub").textContent = `Every cell the clean-up changed in “${file}”, shown as original → new.`;
+    if (id) $("cleanupBack").href = "cleanup.html" + location.search;
     if (!id) return show("No upload selected. Go back, upload a file, then open this page from “What was changed”.", true);
     try {
       const res = await fetch("/api/changes/" + encodeURIComponent(id));
@@ -194,7 +196,8 @@
       if (!res.ok) return show(data.error || "Could not load the changes.", true);
       if (data.notes?.length) { $("notes").replaceChildren(...data.notes.map(n => el("li", null, n))); $("notesCard").hidden = false; }
       all = (data.changes || []).sort((a, b) => a.rowNumber - b.rowNumber);
-      if (!all.length) return show("No records were changed by the clean-up rules. Calculated columns (Age, Is Sample Twin, hand ratios) are added to every row and are not listed here.");
+      if (!all.length) return show((data.cleanup?.length ? "The applied clean-up rules did not change any value in this file." : "No clean-up rules are applied, so every value is as uploaded. Switch rules on from “Clean-up rules” in the ETL tab.")
+        + " Calculated columns (Age, Is Sample Twin, hand ratios) are added to every row and are not listed here.");
       $("tableCard").hidden = false;
       renderRules(); render();
     } catch { show("Could not reach the server.", true); }

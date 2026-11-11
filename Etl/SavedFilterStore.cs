@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 
 namespace EtlApp.Etl;
 
+/// <summary>A filter remembered from an earlier download.</summary>
 /// <param name="Columns">Selected export columns (null for entries saved before columns were stored).</param>
 /// <param name="Renames">Original column name -> header used in the export (only the renamed ones).</param>
 public sealed record SavedFilter(
@@ -11,18 +12,22 @@ public sealed record SavedFilter(
     List<string>? Columns, Dictionary<string, string>? Renames,
     List<SortSpec>? Sorts = null, List<string>? ColumnOrder = null);
 
-/// <summary>
-/// Remembers the filters (plus selected / renamed columns) used for a download in a single SQLite file (DATA_DIR/etl.db).
-/// Each saved filter has a name (case-insensitive, unique) and remembers the file name it was used for;
-/// saving under an existing name replaces the earlier entry.
-/// Connections are not pooled, so the .db file is closed between calls and safe to copy for backups.
-/// </summary>
+/// <summary>A saved multi-sheet setup (sheets, filters, columns, renames, sorts) as the page's own JSON.</summary>
 public sealed record SavedWorkflow(long Id, string Name, string Json, DateTime SavedAt);
 
+/// <summary>
+/// Remembers the filters (plus selected / renamed columns) used for a download, and saved multi-sheet setups,
+/// in a single SQLite file (DATA_DIR/etl.db).
+/// Each saved filter / setup has a name (case-insensitive, unique); saving under an existing name replaces the earlier entry.
+/// Connections are not pooled, so the .db file is closed between calls and safe to copy for backups.
+/// The schema is created / upgraded once per process, on first use.
+/// </summary>
 public sealed class SavedFilterStore
 {
     readonly string _dir;
     readonly string _connStr;
+    readonly object _schemaGate = new();
+    volatile bool _schemaReady;
 
     public SavedFilterStore(IConfiguration cfg)
     {
@@ -58,9 +63,27 @@ public sealed class SavedFilterStore
 
     SqliteConnection Open()
     {
-        Directory.CreateDirectory(_dir);
+        if (!_schemaReady)
+        {
+            lock (_schemaGate)
+            {
+                if (!_schemaReady)
+                {
+                    Directory.CreateDirectory(_dir);
+                    using var init = new SqliteConnection(_connStr);
+                    init.Open();
+                    EnsureSchema(init);
+                    _schemaReady = true;
+                }
+            }
+        }
         var conn = new SqliteConnection(_connStr);
         conn.Open();
+        return conn;
+    }
+
+    static void EnsureSchema(SqliteConnection conn)
+    {
 
         // upgrade from the first version of the table (no "name" column; file_name was the unique key)
         var cols = TableColumns(conn);
@@ -102,7 +125,15 @@ public sealed class SavedFilterStore
                 saved_at TEXT NOT NULL)";
             cmd.ExecuteNonQuery();
         }
-        return conn;
+    }
+
+    public bool DeleteWorkflow(long id)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM saved_workflows WHERE id = $id";
+        cmd.Parameters.AddWithValue("$id", id);
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     public void SaveWorkflow(string name, string json)
@@ -127,17 +158,6 @@ public sealed class SavedFilterStore
         while (r.Read()) list.Add(new SavedWorkflow(r.GetInt64(0), r.GetString(1), r.GetString(2),
             DateTime.Parse(r.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
         return list;
-    }
-
-    public SavedWorkflow? GetWorkflow(long id)
-    {
-        using var conn = Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id,name,workflow_json,saved_at FROM saved_workflows WHERE id=$id";
-        cmd.Parameters.AddWithValue("$id", id);
-        using var r = cmd.ExecuteReader();
-        return r.Read() ? new SavedWorkflow(r.GetInt64(0), r.GetString(1), r.GetString(2),
-            DateTime.Parse(r.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)) : null;
     }
 
     public void Save(string name, string fileName, string mode, List<FilterSpec> filters,

@@ -1,8 +1,31 @@
 using EtlApp.Etl;
 using System.Globalization;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 
-const long MaxUploadBytes = 50L * 1024 * 1024;
+const long MaxUploadBytes = 20L * 1024 * 1024;
+
+// `dotnet EtlApp.dll --healthcheck` is the container's HEALTHCHECK (the runtime image has no curl / wget)
+if (args.Contains("--healthcheck"))
+{
+    try
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var res = await http.GetAsync("http://127.0.0.1:8080/healthz");
+        return res.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch { return 1; }
+}
+
+// `dotnet run` locally: read APP_USERNAME / APP_PASSWORD from a .env file next to the app (docker compose passes them via env_file).
+// Variables already set in the environment win.
+LoadDotEnv(Path.Combine(Directory.GetCurrentDirectory(), ".env"));
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = MaxUploadBytes);
@@ -10,14 +33,93 @@ builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = MaxUpl
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<SavedFilterStore>();
 
+// Single login (APP_USERNAME / APP_PASSWORD). The sign-in cookie is encrypted with keys kept in DATA_DIR, so a restart does not log you out.
+var loginUser = builder.Configuration["APP_USERNAME"]?.Trim();
+var loginPassword = builder.Configuration["APP_PASSWORD"];
+if (string.IsNullOrEmpty(loginUser) || string.IsNullOrEmpty(loginPassword))
+{
+    // thrown (not just logged) so Visual Studio / docker logs show the reason instead of only "failed to listen on port"
+    throw new InvalidOperationException(
+        $"APP_USERNAME and APP_PASSWORD must be set: copy .env.example to .env in {Directory.GetCurrentDirectory()} and fill them in.");
+}
+var dataDir = builder.Configuration["DATA_DIR"] ?? "data";
+builder.Services.AddDataProtection()
+    .SetApplicationName("EtlApp")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDir, "keys")));
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(o =>
+    {
+        o.Cookie.Name = "etl_auth";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SameSite = SameSiteMode.Strict;           // other sites cannot make the browser send it (no cross-site requests to /api)
+        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        o.ExpireTimeSpan = TimeSpan.FromHours(12);
+        o.SlidingExpiration = true;
+        o.LoginPath = "/login";
+    });
+
 var app = builder.Build();
+
+app.UseAuthentication();
+
+// Everything except the login page, its stylesheet and the health check needs a signed-in user.
+// Pages redirect to the login page; API calls get 401 (the page then sends the user to the login page).
+app.Use(async (ctx, next) =>
+{
+    var path = ctx.Request.Path;
+    if (ctx.User.Identity?.IsAuthenticated == true || path.StartsWithSegments("/healthz") || path.StartsWithSegments("/login")
+        || path.Equals("/app.css", StringComparison.OrdinalIgnoreCase))
+    {
+        await next(); return;
+    }
+    if (path.StartsWithSegments("/api"))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsJsonAsync(new { error = "Your sign-in has expired. Please sign in again." });
+        return;
+    }
+    var back = path + ctx.Request.QueryString;
+    ctx.Response.Redirect("/login" + (back == "/" ? "" : "?returnUrl=" + Uri.EscapeDataString(back)));
+});
 
 app.UseDefaultFiles();   // serves wwwroot/index.html at "/"
 app.UseStaticFiles();
 
 app.MapGet("/healthz", () => Results.Ok("ok"));
 
-// 1) Upload the workbook -> run the ETL -> return columns (with types + distinct values for the filters)
+app.MapGet("/login", (HttpContext ctx) => ctx.User.Identity?.IsAuthenticated == true
+    ? Results.Redirect(SafeReturnUrl(ctx.Request.Query["returnUrl"]))
+    : Results.File(Path.Combine(app.Environment.WebRootPath, "login.html"), "text/html; charset=utf-8"));
+
+var expectedUser = SHA256.HashData(Encoding.UTF8.GetBytes(loginUser));
+var expectedPassword = SHA256.HashData(Encoding.UTF8.GetBytes(loginPassword));
+app.MapPost("/login", async (HttpContext ctx, ILogger<Program> log) =>
+{
+    var form = await ctx.Request.ReadFormAsync();
+    var returnUrl = SafeReturnUrl(form["returnUrl"]);
+    var userOk = CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(form["username"].ToString().Trim())), expectedUser);
+    var passOk = CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(form["password"].ToString())), expectedPassword);
+    if (!(userOk & passOk))
+    {
+        log.LogWarning("Failed sign-in from {Ip}", ctx.Connection.RemoteIpAddress);
+        await Task.Delay(1000);                            // slows down password guessing
+        return Results.Redirect("/login?error=1" + (returnUrl == "/" ? "" : "&returnUrl=" + Uri.EscapeDataString(returnUrl)));
+    }
+    var identity = new ClaimsIdentity(new[] { new Claim(ClaimTypes.Name, loginUser) }, CookieAuthenticationDefaults.AuthenticationScheme);
+    await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+    return Results.Redirect(returnUrl);
+});
+
+app.MapPost("/api/logout", async (HttpContext ctx) =>
+{
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok();
+});
+
+// only one workbook is parsed at a time: parsing is the memory-hungry step
+var uploadGate = new SemaphoreSlim(1, 1);
+
+// 1) Upload the workbook -> renames + calculated columns (no clean-up rules) -> return columns (with types + distinct values for the filters)
 app.MapPost("/api/upload", async (HttpRequest req, SessionStore store, ILogger<Program> log) =>
 {
     if (!req.HasFormContentType)
@@ -30,144 +132,134 @@ app.MapPost("/api/upload", async (HttpRequest req, SessionStore store, ILogger<P
     if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(new { error = "Only .xlsx files are supported." });
 
+    if (!await uploadGate.WaitAsync(TimeSpan.FromSeconds(60)))
+        return Results.Json(new { error = "The server is busy with another upload. Please try again in a moment." }, statusCode: 503);
     try
     {
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms);
         ms.Position = 0;
 
-        var (headers, rows, sheet) = ExcelIo.Read(ms);
+        var (headers, rows, sheet) = ExcelIo.Read(ms, SessionStore.MaxCellsPerUpload);
         var result = Transformer.Run(headers, rows);
-        var id = store.Add(result);
-
-        return Results.Ok(new
-        {
-            id,
-            fileName = file.FileName,
-            sheet,
-            rowCount = result.Rows.Count,
-            columns = result.Columns,
-            columnInfo = Filtering.Describe(result),
-            notes = result.Notes
-        });
+        var id = store.Add(file.FileName, sheet, headers, rows, result);
+        return Results.Ok(SessionInfo(id, store.GetEntry(id)!));
+    }
+    catch (InvalidDataException ex)          // our own, readable messages (empty / too large sheet)
+    {
+        log.LogWarning(ex, "Upload rejected");
+        return Results.BadRequest(new { error = ex.Message });
     }
     catch (Exception ex)
     {
         log.LogWarning(ex, "Upload failed");
-        return Results.BadRequest(new { error = $"Could not process the file: {ex.Message}" });
+        return Results.BadRequest(new { error = "The file could not be read as an Excel workbook (.xlsx). Make sure it is not password-protected or damaged." });
     }
+    finally { uploadGate.Release(); }
+});
+
+// 1a) Current state of an upload (columns change when clean-up rules are switched on / off on the clean-up page)
+app.MapGet("/api/session/{id}", (string id, SessionStore store) =>
+{
+    var e = store.GetEntry(id);
+    return e == null ? Expired() : Results.Ok(SessionInfo(id, e));
+});
+
+// 1b) Every cell the clean-up rules changed, original vs new (used by changes.html)
+app.MapGet("/api/changes/{id}", (string id, SessionStore store) =>
+{
+    var e = store.GetEntry(id);
+    if (e == null) return Expired();
+    return Results.Ok(new { notes = e.Data.Notes, changes = e.Data.Changes ?? new List<CellChange>(), cleanup = e.Cleanup, fileName = e.FileName });
+});
+
+// 1c) Optional clean-up rules: what each would change (nothing is applied here)
+app.MapPost("/api/cleanup/{id}/preview", (string id, CleanupRequest body, SessionStore store) =>
+{
+    var e = store.GetEntry(id);
+    if (e == null) return Expired();
+    var selected = KnownRules(body.Rules);
+
+    // every value rule on, to show what each one would change; value rules touch different columns, so they do not interfere
+    var valueRules = CleanupRules.All.Select(r => r.Key).Where(k => k != CleanupRules.DropEmptyOther).ToList();
+    var all = Transformer.Run(e.Headers, e.Raw, valueRules);
+    // which "Other" columns the drop rule would remove, given the rules currently ticked
+    var withoutDrop = Transformer.Run(e.Headers, e.Raw, selected.Where(k => k != CleanupRules.DropEmptyOther).ToList());
+    var withDrop = Transformer.Run(e.Headers, e.Raw, selected.Where(k => k != CleanupRules.DropEmptyOther).Append(CleanupRules.DropEmptyOther).ToList());
+    var removed = withoutDrop.Columns.Except(withDrop.Columns).ToList();
+
+    var rules = CleanupRules.All.Select(r =>
+    {
+        var changes = (all.Changes ?? new()).Where(c => c.RuleKey == r.Key).ToList();
+        var mappings = changes
+            .GroupBy(c => (c.Column, c.Original, c.Updated))
+            .Select(g => new { column = g.Key.Column, original = g.Key.Original, updated = g.Key.Updated, count = g.Count() })
+            .OrderByDescending(m => m.count).ThenBy(m => m.original, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return new
+        {
+            key = r.Key, title = r.Title, description = r.Description,
+            applied = e.Cleanup.Contains(r.Key),
+            changedRows = changes.Select(c => c.RowNumber).Distinct().Count(),
+            changedCells = changes.Count,
+            mappings = mappings.Take(500).ToList(),
+            mappingCount = mappings.Count,
+            removedColumns = r.Key == CleanupRules.DropEmptyOther ? removed : null
+        };
+    }).ToList();
+    return Results.Ok(new { fileName = e.FileName, version = e.Version, rules });
+});
+
+// 1d) Apply the chosen clean-up rules (rebuilt from the uploaded rows, so unticking a rule undoes it)
+app.MapPost("/api/cleanup/{id}", (string id, CleanupRequest body, SessionStore store) =>
+{
+    var e = store.GetEntry(id);
+    if (e == null) return Expired();
+    var unknown = (body.Rules ?? new()).Where(k => !CleanupRules.IsKnown(k)).ToList();
+    if (unknown.Count > 0) return Results.BadRequest(new { error = $"Unknown clean-up rule: {string.Join(", ", unknown)}." });
+    var rules = KnownRules(body.Rules);
+    e.SetCleanup(rules, Transformer.Run(e.Headers, e.Raw, rules));
+    return Results.Ok(SessionInfo(id, e));
 });
 
 // 2) How many rows match the current filters?
 app.MapPost("/api/count", (CountRequest body, SessionStore store) =>
 {
     var data = store.Get(body.Id ?? "");
-    if (data == null)
-        return Results.NotFound(new { error = "Session expired. Please upload the file again." });
-
+    if (data == null) return Expired();
     try
     {
         var rows = Filtering.Apply(data, body.Filters, body.Mode);
         return Results.Ok(new { count = rows.Count, total = data.Rows.Count });
     }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-});
-
-// 1b) Every cell the clean-up rules changed, original vs new (used by changes.html)
-app.MapGet("/api/changes/{id}", (string id, SessionStore store) =>
-{
-    var data = store.Get(id);
-    if (data == null)
-        return Results.NotFound(new { error = "This upload has expired. Please upload the file again." });
-    return Results.Ok(new { notes = data.Notes, changes = data.Changes ?? new List<CellChange>() });
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 
 // 2b) First few rows of the (filtered) data with the chosen columns, for the preview table
 app.MapPost("/api/preview", (PreviewRequest body, SessionStore store) =>
 {
     var data = store.Get(body.Id ?? "");
-    if (data == null)
-        return Results.NotFound(new { error = "Session expired. Please upload the file again." });
+    if (data == null) return Expired();
 
     var columns = OrderedColumns(data.Columns, body.Columns);
     try
     {
         var rows = SortRows(Filtering.Apply(data, body.Filters, body.Mode), body.Sorts, data.Columns);
         var limit = Math.Clamp(body.Limit ?? 10, 1, 50);
-        var headers = columns.Select(c =>
-            body.Renames != null && body.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
+        var headers = OutputHeaders(columns, body.Renames);
         var sample = rows.Take(limit)
             .Select(r => columns.Select(c => PreviewText(r.TryGetValue(c, out var v) ? v : null)).ToList())
             .ToList();
         return Results.Ok(new { headers, rows = sample, total = rows.Count });
     }
-    catch (ArgumentException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-});
-
-// 3) Export the chosen columns of the (filtered) transformed data as .xlsx
-app.MapPost("/api/export", (ExportRequest body, SessionStore store, SavedFilterStore saved, HttpContext http, ILogger<Program> log) =>
-{
-    var data = store.Get(body.Id ?? "");
-    if (data == null)
-        return Results.NotFound(new { error = "Session expired. Please upload the file again." });
-
-    var columns = OrderedColumns(data.Columns, body.Columns);   // Id is always exported; the user's column order is kept
-    if (columns.Count == 0)
-        return Results.BadRequest(new { error = "Select at least one column." });
-
-    List<Dictionary<string, object?>> rows;
-    try { rows = SortRows(Filtering.Apply(data, body.Filters, body.Mode), body.Sorts, data.Columns); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-
-    if (rows.Count == 0)
-        return Results.BadRequest(new { error = "No rows match the filters." });
-
-    // optional header renames (export only; data lookup still uses the original column names)
-    var headers = columns.Select(c =>
-        body.Renames != null && body.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
-    var dup = headers.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
-    if (dup != null)
-        return Results.BadRequest(new { error = $"Duplicate column name \"{dup.Key}\" after renaming. Please use unique names." });
-
-    var bytes = ExcelIo.Write(data with { Rows = rows }, columns, headers);
-    // optional custom file name; the extension is always .xlsx (any typed extension is dropped)
-    var baseName = SanitizeFileName(body.FileName);
-    var fileName = baseName != null ? $"{baseName}.xlsx" : $"Research_Form_Transformed_{DateTime.Now:yyyyMMdd_HHmm}.xlsx";
-    // optionally remember the filters under the downloaded file name (a failure here must not block the download)
-    if (body.SaveFilters == true)
-    {
-        var active = Filtering.Active(body.Filters);
-        var savedOk = false;
-        if (active.Count > 0)
-        {
-            var filterName = body.FilterName?.Trim();
-            if (string.IsNullOrEmpty(filterName)) filterName = fileName;          // default: the file name
-            if (filterName.Length > 100) filterName = filterName[..100].TrimEnd();
-            var keptRenames = new Dictionary<string, string>();       // only columns that actually got a new header
-            for (var i = 0; i < columns.Count; i++)
-                if (headers[i] != columns[i]) keptRenames[columns[i]] = headers[i];
-            try { saved.Save(filterName, fileName, string.Equals(body.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, columns, keptRenames, body.Sorts, body.ColumnOrder); savedOk = true; }
-            catch (Exception ex) { log.LogWarning(ex, "Could not save filters"); }
-        }
-        http.Response.Headers["X-Filters-Saved"] = savedOk ? "1" : "0";
-    }
-    return Results.File(
-        bytes,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        fileName);
 });
 
-// Multi-sheet export: each sheet has independent filters, columns, renames, and output name.
+// 3) Export: each sheet has independent filters, columns, renames, sorts and output name.
 app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store, SavedFilterStore saved, HttpContext http, ILogger<Program> log) =>
 {
     var data = store.Get(body.Id ?? "");
-    if (data == null) return Results.NotFound(new { error = "Session expired. Please upload the file again." });
+    if (data == null) return Expired();
     if (body.Sheets == null || body.Sheets.Count == 0) return Results.BadRequest(new { error = "Add at least one output sheet." });
     try
     {
@@ -176,7 +268,7 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
             .Select(sheet => sheet.FilterName?.Trim() ?? "")
             .ToList();
         if (requestedFilterNames.Any(string.IsNullOrWhiteSpace))
-            return Results.BadRequest(new { error = "Enter a filter name for every sheet where Remember these filters is selected." });
+            return Results.BadRequest(new { error = "Enter a filter name for every sheet where Also update on export is selected." });
         var duplicateFilterName = requestedFilterNames
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
@@ -185,42 +277,33 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
 
         var exports = new List<ExcelIo.SheetExport>();
         // filters are remembered only after the workbook was built successfully (a failed export must not leave half-saved filters)
-        var pendingSaves = new List<(string Name, string Label, string Mode, List<FilterSpec> Filters, List<string> Columns, Dictionary<string, string> Renames, List<SortSpec>? Sorts, List<string>? ColumnOrder)>();
+        var pendingSaves = new List<Action>();
         foreach (var sheet in body.Sheets)
         {
+            var sheetName = (sheet.SheetName ?? "").Trim();
             var cols = OrderedColumns(data.Columns, sheet.Columns);
-            if (cols.Count == 0) throw new ArgumentException($"Sheet '{sheet.SheetName}' has no selected columns.");
+            if (cols.Count == 0) throw new ArgumentException($"Sheet '{sheetName}' has no selected columns.");
             var rows = SortRows(Filtering.Apply(data, sheet.Filters, sheet.Mode), sheet.Sorts, data.Columns);
-            if (rows.Count == 0) throw new ArgumentException($"No rows match the filters for sheet '{sheet.SheetName}'.");
-            var headers = cols.Select(c => sheet.Renames != null && sheet.Renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
+            if (rows.Count == 0) throw new ArgumentException($"No rows match the filters for sheet '{sheetName}'.");
+            var headers = OutputHeaders(cols, sheet.Renames);
             var dup = headers.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
-            if (dup != null) throw new ArgumentException($"Sheet '{sheet.SheetName}' has duplicate column name '{dup.Key}' after renaming.");
-            exports.Add(new ExcelIo.SheetExport(sheet.SheetName ?? "", data with { Rows = rows }, cols, headers));
-            if (sheet.SaveFilters == true)
+            if (dup != null) throw new ArgumentException($"Sheet '{sheetName}' has duplicate column name '{dup.Key}' after renaming.");
+            exports.Add(new ExcelIo.SheetExport(sheetName, data with { Rows = rows }, cols, headers));
+
+            if (sheet.SaveFilters == true && Filtering.Active(sheet.Filters).Count > 0)
             {
-                var active = Filtering.Active(sheet.Filters);
-                if (active.Count > 0)
-                {
-                    // Save using the exact filter name entered for this sheet; do not append the sheet name.
-                    var filterName = sheet.FilterName?.Trim();
-                    if (string.IsNullOrWhiteSpace(filterName))
-                        throw new ArgumentException($"Enter a filter name for sheet '{sheet.SheetName}'.");
-                    if (filterName.Length > 100)
-                        throw new ArgumentException($"Filter name for sheet '{sheet.SheetName}' must be 100 characters or fewer.");
-                    var sheetName = (sheet.SheetName ?? "Sheet").Trim();
-                    var keptRenames = new Dictionary<string, string>();
-                    for (var i = 0; i < cols.Count; i++)
-                        if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
-                    pendingSaves.Add((filterName, sheetName, string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and", active, cols, keptRenames, sheet.Sorts, sheet.ColumnOrder));
-                }
+                var filterName = sheet.FilterName!.Trim();
+                if (filterName.Length > 100)
+                    throw new ArgumentException($"Filter name for sheet '{sheetName}' must be 100 characters or fewer.");
+                pendingSaves.Add(() => SaveSheetFilters(saved, filterName, sheet, cols, headers));
             }
         }
         var bytes = ExcelIo.WriteMultiple(exports);
         var failedSaves = 0;
-        foreach (var ps in pendingSaves)
+        foreach (var save in pendingSaves)
         {
-            try { saved.Save(ps.Name, ps.Label, ps.Mode, ps.Filters, ps.Columns, ps.Renames, ps.Sorts, ps.ColumnOrder); }
-            catch (Exception ex) { failedSaves++; log.LogWarning(ex, "Could not save filters '{FilterName}'", ps.Name); }
+            try { save(); }
+            catch (Exception ex) { failedSaves++; log.LogWarning(ex, "Could not save filters"); }
         }
         if (pendingSaves.Count > 0) http.Response.Headers["X-Filters-Save-Failed"] = failedSaves.ToString();   // the page shows a warning when > 0
         var baseName = SanitizeFileName(body.FileName);
@@ -231,7 +314,32 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
     catch (Exception ex) { log.LogError(ex, "Multi-sheet export failed"); return Results.Problem("Could not create the workbook."); }
 });
 
-// 4) Filters remembered from earlier downloads (newest first)
+// 4) Save the current sheet's filters (with its columns, renames and sorts) right now, without exporting
+app.MapPost("/api/saved-filters", (SaveFilterRequest body, SessionStore store, SavedFilterStore saved, ILogger<Program> log) =>
+{
+    var data = store.Get(body.Id ?? "");
+    if (data == null) return Expired();
+    var name = body.Name?.Trim() ?? "";
+    if (name.Length == 0) return Results.BadRequest(new { error = "Enter a name for these filters." });
+    if (name.Length > 100) return Results.BadRequest(new { error = "Filter names must be 100 characters or fewer." });
+    var sheet = body.Sheet;
+    if (sheet == null || Filtering.Active(sheet.Filters).Count == 0) return Results.BadRequest(new { error = "Add at least one filter condition first." });
+    try
+    {
+        Filtering.Apply(data, sheet.Filters, sheet.Mode);   // rejects filters that do not fit this file
+        var cols = OrderedColumns(data.Columns, sheet.Columns);
+        SaveSheetFilters(saved, name, sheet, cols, OutputHeaders(cols, sheet.Renames));
+        return Results.Ok(new { name });
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not save filters");
+        return Results.Json(new { error = "Could not save the filters on the server." }, statusCode: 500);
+    }
+});
+
+// 4a) Saved filters (newest first)
 app.MapGet("/api/saved-filters", (SavedFilterStore saved, ILogger<Program> log) =>
 {
     try { return Results.Ok(saved.List()); }
@@ -251,6 +359,111 @@ app.MapDelete("/api/saved-filters/{id:long}", (long id, SavedFilterStore saved, 
         return Results.Json(new { error = "Could not delete." }, statusCode: 500);
     }
 });
+
+// 5) Saved setups (all output sheets with their filters / columns), kept on the server so every device sees them
+app.MapGet("/api/workflows", (SavedFilterStore saved, ILogger<Program> log) =>
+{
+    try
+    {
+        return Results.Ok(saved.ListWorkflows().Select(w => new
+        {
+            id = w.Id, name = w.Name, savedAt = w.SavedAt,
+            workflow = JsonSerializer.Deserialize<JsonElement>(w.Json)
+        }));
+    }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not read saved setups");
+        return Results.Json(new { error = "Saved setups are unavailable." }, statusCode: 500);
+    }
+});
+
+app.MapPost("/api/workflows", (WorkflowRequest body, SavedFilterStore saved, ILogger<Program> log) =>
+{
+    var name = body.Name?.Trim() ?? "";
+    if (name.Length == 0) return Results.BadRequest(new { error = "Enter a name for the setup." });
+    if (name.Length > 100) return Results.BadRequest(new { error = "Setup names must be 100 characters or fewer." });
+    if (body.Workflow is not { ValueKind: JsonValueKind.Object } wf) return Results.BadRequest(new { error = "Nothing to save." });
+    var json = wf.GetRawText();
+    if (json.Length > 1_000_000) return Results.BadRequest(new { error = "This setup is too large to save." });
+    try { saved.SaveWorkflow(name, json); return Results.Ok(new { name }); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not save setup");
+        return Results.Json(new { error = "Could not save the setup on the server." }, statusCode: 500);
+    }
+});
+
+app.MapDelete("/api/workflows/{id:long}", (long id, SavedFilterStore saved, ILogger<Program> log) =>
+{
+    try { return saved.DeleteWorkflow(id) ? Results.Ok() : Results.NotFound(new { error = "Not found." }); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not delete setup");
+        return Results.Json(new { error = "Could not delete." }, statusCode: 500);
+    }
+});
+
+// remembers a sheet's filters with its selected columns, the renamed ones only, sorts and column order
+static void SaveSheetFilters(SavedFilterStore saved, string filterName, SheetExportRequest sheet, List<string> cols, List<string> headers)
+{
+    var keptRenames = new Dictionary<string, string>();
+    for (var i = 0; i < cols.Count; i++)
+        if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
+    var mode = string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and";
+    var sheetName = (sheet.SheetName ?? "").Trim();
+    saved.Save(filterName, sheetName.Length > 0 ? sheetName : "Sheet", mode, Filtering.Active(sheet.Filters), cols, keptRenames, sheet.Sorts, sheet.ColumnOrder);
+}
+
+// only same-site paths ("/x", not "//evil.com" or "http://...") so the login cannot bounce the user to another site
+static string SafeReturnUrl(string? url) =>
+    !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\") ? url : "/";
+
+// minimal .env reader: KEY=VALUE lines, # comments, optional surrounding quotes
+static void LoadDotEnv(string path)
+{
+    if (!File.Exists(path)) return;
+    foreach (var raw in File.ReadAllLines(path))
+    {
+        var line = raw.Trim();
+        if (line.Length == 0 || line.StartsWith('#')) continue;
+        if (line.StartsWith("export ")) line = line[7..].TrimStart();
+        var eq = line.IndexOf('=');
+        if (eq <= 0) continue;
+        var key = line[..eq].Trim();
+        var value = line[(eq + 1)..].Trim();
+        if (value.Length >= 2 && (value[0] == '"' || value[0] == '\'') && value[^1] == value[0]) value = value[1..^1];
+        if (Environment.GetEnvironmentVariable(key) == null) Environment.SetEnvironmentVariable(key, value);
+    }
+}
+
+static IResult Expired() => Results.NotFound(new { error = "This upload has expired (uploads are kept for 1 hour after last use). Please upload the file again." });
+
+static object SessionInfo(string id, SessionStore.Entry e)
+{
+    var data = e.Data;
+    return new
+    {
+        id,
+        fileName = e.FileName,
+        sheet = e.Sheet,
+        rowCount = data.Rows.Count,
+        columns = data.Columns,
+        columnInfo = Filtering.Describe(data),
+        notes = data.Notes,
+        version = e.Version,
+        cleanup = e.Cleanup,
+        changeCount = data.Changes?.Count ?? 0
+    };
+}
+
+// the requested rules in the canonical order, unknown / repeated ones dropped
+static List<string> KnownRules(List<string>? rules) =>
+    CleanupRules.All.Select(r => r.Key).Where(k => rules != null && rules.Contains(k)).ToList();
+
+// header shown / exported for each column: the user's rename, or the column name itself
+static List<string> OutputHeaders(List<string> columns, Dictionary<string, string>? renames) =>
+    columns.Select(c => renames != null && renames.TryGetValue(c, out var n) && !string.IsNullOrWhiteSpace(n) ? n.Trim() : c).ToList();
 
 // Columns in the order the user arranged them (unknown names dropped, duplicates removed); Id is always included, first if the user did not place it.
 static List<string> OrderedColumns(IReadOnlyList<string> all, List<string>? requested)
@@ -301,27 +514,43 @@ static string? SanitizeFileName(string? name)
 }
 
 app.Run();
+return 0;
 
 record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
 record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit, List<SortSpec>? Sorts);
-record ExportRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, string? FileName, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts, List<string>? ColumnOrder = null);
+record CleanupRequest(List<string>? Rules);
+record WorkflowRequest(string? Name, JsonElement? Workflow);
+record SaveFilterRequest(string? Id, string? Name, SheetExportRequest? Sheet);
 
 record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
 record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts, List<string>? ColumnOrder = null);
 public sealed record SortSpec(string? Column, string? Dir);
 
-// Compares cell values for sorting: blanks last (in both directions), then numbers, dates, booleans, text (case-insensitive).
-sealed class CellComparer(bool desc) : IComparer<object?>
+// Compares cell values for sorting: blanks last (in both directions), then numbers (including number-like text, so "9" < "10"),
+// dates, booleans, text (case-insensitive).
+public sealed class CellComparer(bool desc) : IComparer<object?>
 {
     static bool Blank(object? v) => v == null || (v is string s && string.IsNullOrWhiteSpace(s));
-    static int Rank(object v) => v switch { double or int or long or decimal or float => 0, DateTime => 1, bool => 2, _ => 3 };
+
+    static bool AsNumber(object v, out double n)
+    {
+        switch (v)
+        {
+            case double or int or long or decimal or float or short: n = Convert.ToDouble(v, CultureInfo.InvariantCulture); return true;
+            case string s: return double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out n);
+            default: n = 0; return false;
+        }
+    }
+
+    static int Rank(object v, out double n) => AsNumber(v, out n) ? 0 : v switch { DateTime => 1, bool => 2, _ => 3 };
+
     public int Compare(object? a, object? b)
     {
         bool ba = Blank(a), bb = Blank(b);
         if (ba || bb) return ba == bb ? 0 : ba ? 1 : -1;
-        int ra = Rank(a!), rb = Rank(b!);
+        int ra = Rank(a!, out var na), rb = Rank(b!, out var nb);
         int r = ra != rb ? ra.CompareTo(rb)
-            : ra == 0 ? Convert.ToDouble(a, CultureInfo.InvariantCulture).CompareTo(Convert.ToDouble(b, CultureInfo.InvariantCulture))
+            : ra == 0 ? na.CompareTo(nb)
             : ra == 1 ? ((DateTime)a!).CompareTo((DateTime)b!)
             : ra == 2 ? ((bool)a!).CompareTo((bool)b!)
             : StringComparer.OrdinalIgnoreCase.Compare(Convert.ToString(a, CultureInfo.InvariantCulture), Convert.ToString(b, CultureInfo.InvariantCulture));

@@ -5,10 +5,11 @@ services:
     ports:
       - "8085:8080"        # change the left number if 8085 is taken
     restart: unless-stopped
+    env_file: .env         # APP_USERNAME / APP_PASSWORD (copy .env.example to .env and fill them in)
     environment:
-      TZ: Asia/Kolkata     # "Age" and file-name timestamps use the server date; change to your own time zone if needed
-    mem_limit: 256m        # hard caps so it can never starve the media server
+      TZ: Asia/Kolkata     # file-name timestamps (and Age, for rows without a form date) use the server date; change to your own time zone if needed
+    mem_limit: 512m        # hard caps so it can never starve the media server (uploads are capped at 20 MB / 1,000,000 cells)
     cpus: 0.5
     user: "1000:1000"      # run as your Debian user (check with: id -u; id -g) so it can write to ./data
     volumes:
-      - ./data:/data       # SQLite file (saved filters) lives here: ./data/etl.db  -> back up this folder
+      - ./data:/data       # SQLite file (saved filters + saved setups) lives here: ./data/etl.db  -> back up this folder

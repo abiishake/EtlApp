@@ -3,3 +3,5 @@ obj/
 data/
 .git/
 *.md
+tests/
+.env

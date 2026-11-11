@@ -10,11 +10,13 @@ public sealed record FilterSpec(string? Column, string? Op, string? Value, strin
 public sealed record DistinctValue(string Value, int Count);
 public sealed record ColumnInfo(
     string Name,
-    string Type,                    // "text" or "number"
+    string Type,                    // "text", "number" or "date"
     int DistinctCount,
     List<DistinctValue>? Values,    // null when there are too many distinct values to list
     double? Min,
-    double? Max);
+    double? Max,
+    string? MinText = null,         // date columns: earliest / latest date (yyyy-MM-dd)
+    string? MaxText = null);
 
 /// <summary>Describes each column (type + distinct values) and applies row filters. Filters can be nested in AND / OR groups.</summary>
 public static class Filtering
@@ -30,6 +32,7 @@ public static class Filtering
             var values = data.Rows.Select(r => r.TryGetValue(col, out var v) ? v : null)
                                   .Where(v => v != null).Select(v => v!).ToList();
             bool isNumber = values.Count > 0 && values.All(IsNumeric);
+            bool isDate = !isNumber && values.Count > 0 && values.All(v => v is DateTime);
 
             // distinct values with counts (case-insensitive, first spelling wins)
             var counts = new Dictionary<string, (string Shown, double Num, int Count)>(StringComparer.OrdinalIgnoreCase);
@@ -43,15 +46,17 @@ public static class Filtering
             List<DistinctValue>? listed = null;
             if (counts.Count <= MaxListedValues)
             {
-                var ordered = isNumber
-                    ? counts.Values.OrderBy(e => e.Num)
+                var ordered = isNumber || isDate
+                    ? counts.Values.OrderBy(e => isDate ? 0 : e.Num).ThenBy(e => e.Shown, StringComparer.Ordinal)
                     : counts.Values.OrderBy(e => e.Shown, StringComparer.OrdinalIgnoreCase);
                 listed = ordered.Select(e => new DistinctValue(e.Shown, e.Count)).ToList();
             }
 
             double? min = isNumber ? counts.Values.Min(e => e.Num) : null;
             double? max = isNumber ? counts.Values.Max(e => e.Num) : null;
-            result.Add(new ColumnInfo(col, isNumber ? "number" : "text", counts.Count, listed, min, max));
+            string? minText = isDate ? values.Cast<DateTime>().Min().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null;
+            string? maxText = isDate ? values.Cast<DateTime>().Max().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null;
+            result.Add(new ColumnInfo(col, isNumber ? "number" : isDate ? "date" : "text", counts.Count, listed, min, max, minText, maxText));
         }
         return result;
     }
@@ -98,8 +103,27 @@ public static class Filtering
     {
         var col = data.Columns.FirstOrDefault(c => c == f.Column)
                   ?? throw new ArgumentException($"Unknown column '{f.Column}'.");
-        bool isNumber = IsNumberColumn(data, col);
+        var type = ColumnType(data, col);
+        bool isNumber = type == "number";
         var val = f.Value!.Trim();
+
+        if (type == "date")
+        {
+            if (f.Op is not ("eq" or "notEquals" or "gt" or "gte" or "lt" or "lte"))
+                throw new ArgumentException($"Filter '{f.Op}' is not valid for date column '{col}'.");
+            if (!DateTime.TryParseExact(val, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day))
+                throw new ArgumentException($"'{val}' is not a date (use YYYY-MM-DD, column '{col}').");
+            var dop = f.Op;
+            return r => r.TryGetValue(col, out var v) && v is DateTime dt && dop switch
+            {
+                "gt"  => dt.Date > day,
+                "gte" => dt.Date >= day,
+                "lt"  => dt.Date < day,
+                "lte" => dt.Date <= day,
+                "notEquals" => dt.Date != day,
+                _     => dt.Date == day
+            };
+        }
 
         switch (f.Op)
         {
@@ -137,16 +161,19 @@ public static class Filtering
     // ------------------------------------------------------------------ helpers
     static bool IsNumeric(object v) => v is double or float or int or long or decimal or short;
 
-    static bool IsNumberColumn(TransformResult data, string col)
+    /// "number" when every non-empty cell is numeric, "date" when every one is a date, otherwise "text" (same rule as Describe)
+    static string ColumnType(TransformResult data, string col)
     {
-        bool any = false;
+        bool any = false, allNum = true, allDate = true;
         foreach (var r in data.Rows)
         {
             if (!r.TryGetValue(col, out var v) || v == null) continue;
-            if (!IsNumeric(v)) return false;
             any = true;
+            if (!IsNumeric(v)) allNum = false;
+            if (v is not DateTime) allDate = false;
+            if (!allNum && !allDate) return "text";
         }
-        return any;
+        return !any ? "text" : allNum ? "number" : allDate ? "date" : "text";
     }
 
     static string? Shown(Dictionary<string, object?> r, string col) =>
