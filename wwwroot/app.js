@@ -603,7 +603,7 @@
   // ------------------------------------------------------------------ column picker
   function columnRow(c) {
     const on = selected.has(c) || LOCKED.has(c);
-    const label = el("label", "col" + (on ? "" : " off"));
+    const label = el("label", "col" + (on ? "" : " off")); label.dataset.col = c;
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = on;
@@ -630,10 +630,8 @@
     const q = $("search").value.trim().toLowerCase();
     const box = $("cols");
     box.replaceChildren();
-    const groups = [
-      ["Calculated columns", columns.filter(c => CALCULATED.has(c))],
-      ["Original columns", columns.filter(c => !CALCULATED.has(c))]
-    ];
+    // one list in the same order as "Column order" (calculated columns stay where they sit in the export, tagged "calculated")
+    const groups = [["Columns", normOrder(order)]];
     for (const [title, list] of groups) {
       const shown = list.filter(c => c.toLowerCase().includes(q));
       if (!shown.length) continue;
@@ -641,7 +639,7 @@
       const n = list.filter(c => selected.has(c) || LOCKED.has(c)).length;
       head.append(el("b", null, title), el("span", "opt", `${n} of ${list.length} selected`));
       const all = el("button", "mini", "All"), none = el("button", "mini", "None");
-      all.type = none.type = "button"; all.setAttribute("aria-label", "Select all " + title.toLowerCase()); none.setAttribute("aria-label", "Select none of the " + title.toLowerCase());
+      all.type = none.type = "button"; all.setAttribute("aria-label", "Select all columns"); none.setAttribute("aria-label", "Select none of the columns");
       all.onclick = () => { list.forEach(c => selected.add(c)); renderColumns(); };
       none.onclick = () => { list.forEach(c => { if (!LOCKED.has(c)) selected.delete(c); }); renderColumns(); };
       head.append(all, none);
@@ -661,13 +659,14 @@
     if (i < 0 || j < 0 || j >= vis.length) return;
     const a = order.indexOf(c), b = order.indexOf(vis[j]);
     [order[a], order[b]] = [order[b], order[a]];
-    renderOrder(); refresh();
+    renderColumns();
+    $("orderList").querySelector(`[data-col="${CSS.escape(c)}"] button[aria-label$="${delta < 0 ? "up" : "down"}"]:not(:disabled)`)?.focus();
   }
   function dropCol(c, target, after) {
     if (!c || c === target) return;
     order.splice(order.indexOf(c), 1);
     order.splice(order.indexOf(target) + (after ? 1 : 0), 0, c);
-    renderOrder(); refresh();
+    renderColumns();
   }
   function renderOrder() {
     const list = $("orderList"), vis = chosenCols();
@@ -675,7 +674,7 @@
     if (!vis.length) { list.append(el("li", "empty", "Select some columns above.")); return; }
     const shownName = c => ($("renameToggle").checked && renames[c]) ? `${renames[c]}  (${c})` : c;
     vis.forEach((c, i) => {
-      const li = el("li"); li.draggable = true;
+      const li = el("li"); li.draggable = true; li.dataset.col = c;
       const up = el("button", "mini", "↑"), down = el("button", "mini", "↓");
       up.title = "Move up"; down.title = "Move down";
       up.setAttribute("aria-label", "Move " + c + " up"); down.setAttribute("aria-label", "Move " + c + " down");
@@ -691,7 +690,7 @@
       list.append(li);
     });
   }
-  $("resetOrder").onclick = () => { order = [...columns]; renderOrder(); refresh(); };
+  $("resetOrder").onclick = () => { order = [...columns]; renderColumns(); };
 
   // ------------------------------------------------------------------ sort levels
   function renderSorts() {
@@ -781,7 +780,7 @@
         const sort = el("button", "header-sort", h); sort.type = "button"; sort.title = "Toggle sort for " + src; sort.setAttribute("aria-label", "Toggle sort for " + src);
         sort.onclick = () => { const level = sorts.findIndex(x => x.column === src); if (level < 0) sorts.push({ column: src, dir: "asc" }); else if (sorts[level].dir === "asc") sorts[level].dir = "desc"; else sorts.splice(level, 1); renderSorts(); refresh(); };
         const rename = el("button", "header-rename", "✎"); rename.type = "button"; rename.title = "Rename output column " + src; rename.setAttribute("aria-label", "Rename output column " + src);
-        rename.onclick = () => { openPreviewPanel("rename"); const input = [...$("cols").querySelectorAll("input.rn")].find(n => n.getAttribute("aria-label") === "Output name for " + src); input?.focus(); input?.select(); };
+        rename.onclick = () => renameColumn(src);
         th.append(sort, rename);
       } else th.textContent = h;
       th.scope = "col";
@@ -807,24 +806,43 @@
     setStatus($("pvStatus"), `Showing the first ${Math.min(d.rows.length, PREVIEW_ROWS)} of ${fmt(d.total)} rows for sheet “${outputSheets[activeSheetIndex]?.name || ""}”.${sortTxt}`);
   }
 
+  // header ✎: open Columns with rename on, scroll to that column and mark it as the one being edited
+  function renameColumn(src) {
+    if (previewPanel !== "columns") openPreviewPanel("columns");
+    $("renameToggle").checked = true; $("search").value = ""; renderColumns();
+    const row = $("cols").querySelector(`.col[data-col="${CSS.escape(src)}"]`);
+    if (!row) return;
+    row.classList.add("target");
+    const input = row.querySelector("input.rn"); input?.focus({ preventScroll: true }); input?.select();
+    row.scrollIntoView({ block: "center" });   // centred, so it is clear of the pinned summary bar
+    input?.addEventListener("blur", () => row.classList.remove("target"), { once: true });
+  }
+  // briefly flash what a navigation click acts on, so it is obvious where the controls are
+  function flash(node) {
+    if (!node) return;
+    node.classList.remove("flash"); void node.offsetWidth; node.classList.add("flash");
+    node.addEventListener("animationend", () => node.classList.remove("flash"), { once: true });
+  }
+
   // One live set of controls: park in the hidden Preview store when closed.
-  const panelSources = { filter: ["filterControls"], sort: ["sortControls"], columns: ["columnControls", "orderControls"], rename: ["columnControls", "orderControls"], sheets: ["sheetControls"], more: ["notes"] };
-  const panelTitles = { filter: "Filter data", sort: "Sort rows", columns: "Columns & order", rename: "Rename output columns", sheets: "Sheets & saved setups", more: "Review & workbook actions" };
+  const panelSources = { filter: ["filterControls"], sort: ["sortControls"], columns: ["columnControls", "orderControls"], sheets: ["sheetControls"], more: ["notes"] };
+  const panelTitles = { filter: "Filter data", sort: "Sort rows", columns: "Columns, names & order", sheets: "Sheets & saved setups", more: "Review & workbook actions" };
   let previewPanel = null, movedControls = [], panelTrigger = null;
   function closePreviewPanel(focus = true) {
     movedControls.forEach(({ node, home }) => {
       if (home) home.replaceWith(node); else $("pvControlStore").append(node);
     }); movedControls = [];
     $("pvPanelBody").replaceChildren(); $("pvPanel").hidden = true; previewPanel = null;
-    document.querySelectorAll("[data-pv-panel]").forEach(b => b.setAttribute("aria-expanded", "false"));
+    document.querySelectorAll("[data-pv-panel]").forEach(b => { b.setAttribute("aria-expanded", "false"); b.classList.remove("active"); });
+    updateStepper();
     if (focus) panelTrigger?.focus();
   }
   function openPreviewPanel(name) {
     closePreviewPanel(false); previewPanel = name;
     panelTrigger = document.querySelector(`[data-pv-panel="${name}"]`);
-    panelTrigger?.setAttribute("aria-expanded", "true");
+    panelTrigger?.setAttribute("aria-expanded", "true"); panelTrigger?.classList.add("active");
     $("pvPanelTitle").textContent = panelTitles[name]; $("pvPanel").hidden = false;
-    if (name === "rename") { $("renameToggle").checked = true; $("search").value = ""; renderColumns(); }
+    flash($("pvPanel")); updateStepper();
     for (const id of panelSources[name] || []) {
       const node = $(id);
       // Transformation notes keep their Upload home; configuration stays in Preview only.
@@ -841,7 +859,7 @@
   // left navigation: open the chosen panel (or go back to it when it is already open) and bring it into view
   document.querySelectorAll("[data-pv-panel]").forEach(b => b.onclick = () => {
     if (previewPanel !== b.dataset.pvPanel) openPreviewPanel(b.dataset.pvPanel);
-    closeNav();
+    closeNav(); flash($("pvPanel"));
     $("pvPanel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   });
   $("pvClosePanel").onclick = () => closePreviewPanel();
@@ -880,6 +898,7 @@
       if (li.classList.contains("locked")) return;
       closeNav();
       if (li.dataset.target !== "previewCard") closePreviewPanel(false);
+      if (!s.classList.contains("hidden")) flash(s);
       if (!s.classList.contains("hidden")) s.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     };
     li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); li.click(); } };
@@ -888,6 +907,7 @@
     const secs = STEP_LIS.map(li => $(li.dataset.target));
     let cur = 0;
     secs.forEach((s, i) => { if (!s.classList.contains("hidden") && s.getBoundingClientRect().top < window.innerHeight * 0.4) cur = i; });
+    if (previewPanel) cur = STEP_LIS.findIndex(li => li.dataset.target === "previewCard");   // a Preview sub-menu is open
     if (!sessionId) cur = 0;
     document.querySelectorAll(".navsub button").forEach(b => { b.disabled = !sessionId; b.title = sessionId ? (b.id === "openCleanup" ? "Opens the optional clean-up rules in a new tab" : "") : "Upload a workbook first"; });
     STEP_LIS.forEach((li, i) => {
