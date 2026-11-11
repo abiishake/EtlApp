@@ -124,7 +124,7 @@ main > section { scroll-margin-top:var(--sticky-h, 72px); }
 .navsub button { height:32px; border:0; background:none; display:flex; align-items:center; justify-content:flex-start; gap:8px;
                  padding:0 10px; font-size:13px; color:var(--color-text-muted); text-align:left; width:100%; }
 .navsub button:hover:not(:disabled) { background:var(--color-surface); color:var(--color-text); border-color:transparent; }
-.navsub button[aria-expanded="true"] { background:var(--color-accent-soft); color:var(--color-accent); font-weight:600; }
+.navsub button[aria-expanded="true"], .navsub button.active { background:var(--color-accent-soft); color:var(--color-accent); font-weight:600; box-shadow:inset 3px 0 0 var(--color-accent); }
 .navsub .ni { width:16px; text-align:center; flex:none; }
 .navtoggle, .navbackdrop { display:none; }
 .pvpanel { scroll-margin-top:var(--sticky-h, 72px); }
@@ -222,6 +222,7 @@ main > section { scroll-margin-top:var(--sticky-h, 72px); }
 .col { min-height:36px; border-bottom:1px solid var(--color-grid-line); cursor:pointer; }
 .col:last-child { border-bottom:0; }
 .col:hover { background:var(--color-row-hover); }
+.col.target { background:var(--color-accent-soft); box-shadow:inset 3px 0 0 var(--color-accent); }
 .col span.src { overflow-wrap:anywhere; }
 .col.off span.src { color:var(--color-text-muted); }
 .col.off .ctype::after { content:" · excluded"; }
@@ -276,7 +277,11 @@ table.pv tr:last-child td { border-bottom:0; }
 #savedToggle[aria-expanded="true"] .chevron { transform:rotate(90deg); }
 #savedContent { padding:0 12px 10px; }
 #savedSearch { max-width:100%; }
-.pvpanel { border-block:1px solid var(--color-border); padding:12px 0; margin-bottom:12px; }
+.pvpanel { border:1px solid var(--color-accent); border-left-width:4px; border-radius:8px; background:var(--color-surface); padding:12px 14px; margin-bottom:12px; box-shadow:var(--focus-ring); }
+.pvpanelhead h3 { color:var(--color-accent); }
+@keyframes flash { 0% { box-shadow:0 0 0 6px var(--color-accent-soft), var(--focus-ring); } 100% { box-shadow:var(--focus-ring); } }
+.card.flash { animation:flash 900ms ease-out; border-color:var(--color-accent); }
+.pvpanel.flash { animation:flash 900ms ease-out; }
 .pvpanelhead { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
 .pvpanelhead h3 { margin:0; font-size:14px; }
 .pvpanel .subsec { margin-top:8px; }
