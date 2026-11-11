@@ -10,7 +10,7 @@ public static class ExcelIo
     /// <summary>Hidden key on every row read from the upload: the row's real number in the Excel sheet (blank rows are skipped, so it cannot be derived from the position). Never exported.</summary>
     public const string RowNumberKey = "\u0001ExcelRow";
 
-    public static (List<string> Headers, List<Dictionary<string, object?>> Rows, string Sheet) Read(Stream xlsx)
+    public static (List<string> Headers, List<Dictionary<string, object?>> Rows, string Sheet) Read(Stream xlsx, long maxCells = long.MaxValue)
     {
         using var wb = new XLWorkbook(xlsx);
 
@@ -23,6 +23,8 @@ public static class ExcelIo
         int lastCol = ws.LastColumnUsed()?.ColumnNumber() ?? 0;
         int lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
         if (lastCol == 0 || lastRow < 1) throw new InvalidDataException($"Sheet '{ws.Name}' is empty.");
+        if ((long)lastCol * lastRow > maxCells)
+            throw new InvalidDataException($"Sheet '{ws.Name}' is too large ({lastRow:N0} rows x {lastCol:N0} columns; the limit is {maxCells:N0} cells).");
 
         // headers (row 1); skip blank headers, de-duplicate repeated ones
         var headers = new List<string>();
@@ -78,16 +80,7 @@ public static class ExcelIo
         return f.Length > 0 && f.IndexOfAny(new[] { 'y', 'Y', 'd', 'D' }) >= 0 && f.IndexOfAny(new[] { '0', '#' }) < 0;
     }
 
-    public static byte[] Write(TransformResult data, IReadOnlyList<string> columns, IReadOnlyList<string>? headers = null)
-    {
-        using var wb = new XLWorkbook();
-        FillSheet(wb.Worksheets.Add("Transformed Data"), data, columns, headers ?? columns);
-        using var ms = new MemoryStream();
-        wb.SaveAs(ms);
-        return ms.ToArray();
-    }
-
-    /// writes header + rows + formulas + widths + freeze pane + auto-filter into one worksheet (shared by the single- and multi-sheet exports)
+    /// writes header + rows + formulas + widths + freeze pane + auto-filter into one worksheet
     static void FillSheet(IXLWorksheet ws, TransformResult data, IReadOnlyList<string> columns, IReadOnlyList<string> headers)
     {
         // header

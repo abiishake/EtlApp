@@ -1,7 +1,7 @@
-bin/Debug/net8.0/DocumentFormat.OpenXml.dll
 /.vs
-/bin
-/obj
+bin/
+obj/
 /Properties
 data/etl.db
 EtlApp.slnx
+TestResults/

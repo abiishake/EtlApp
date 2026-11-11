@@ -13,11 +13,37 @@ public sealed record TransformResult(
     // every individual cell that the clean-up rules changed (original vs new), for the "changes" page
     List<CellChange>? Changes = null);
 
+/// <summary>The optional clean-up rules. None of them run unless the user switches them on (clean-up page).</summary>
+public static class CleanupRules
+{
+    public const string CasteNt = "caste-nt";
+    public const string EthnicityMap = "ethnicity-map";
+    public const string DiseaseClassify = "disease-classify";
+    public const string DropEmptyOther = "drop-empty-other";
+
+    public sealed record Rule(string Key, string Title, string Description);
+
+    public static readonly IReadOnlyList<Rule> All = new[]
+    {
+        new Rule(CasteNt, "Caste: move 'NT' into Caste",
+            "When 'Enter Other Caste' is 'NT', set Caste to 'NT' and clear the other-caste cell."),
+        new Rule(EthnicityMap, "Ethnicity: map known 'other' values",
+            "Known 'Enter Other Ethnicity' values (e.g. 'Christainity' -> 'Christian', 'Jainism' -> 'Jain') are moved into Ethnicity and the other-ethnicity cell is cleared."),
+        new Rule(DiseaseClassify, "Other disease/symptoms: classify",
+            "Free-text entries are replaced by a standard disease category (e.g. 'hypertension' -> 'Blood Pressure'); unrecognised text is kept as typed."),
+        new Rule(DropEmptyOther, "Remove empty 'Other' columns",
+            "Drop 'Other Caste' / 'Other Ethnicity' when every cell in them is empty (checked after the rules above)."),
+    };
+
+    public static bool IsKnown(string key) => All.Any(r => r.Key == key);
+}
+
 /// <summary>One cell changed by a clean-up rule. RowNumber is the row in the uploaded Excel sheet (header = row 1).</summary>
-public sealed record CellChange(int RowNumber, string? RecordId, string Rule, string Column, string? Original, string? Updated);
+public sealed record CellChange(int RowNumber, string? RecordId, string Rule, string Column, string? Original, string? Updated, string? RuleKey = null);
 
 /// <summary>
-/// All ETL rules from the "Instructions For AI" sheet live here.
+/// All ETL rules from the "Instructions For AI" sheet live here. The renames and calculated columns always run;
+/// the value clean-up rules (<see cref="CleanupRules"/>) only run when they are passed in <c>cleanup</c>.
 /// Pure C# (no Excel / web dependencies) so it is easy to read, change and test.
 /// </summary>
 public static class Transformer
@@ -82,19 +108,22 @@ public static class Transformer
         ("Thyroid",  R(@"thyroid")),
         ("Arthiritis", R(@"arthr")),                 // category spelled as in the form
         ("Asthma",   R(@"asthma")),
-        ("Heart Problem", R(@"heart|cardiac")),
-        ("Lung Problem",  R(@"lung|pulmon|bronch|tubercul|^\s*t\.?\s?b\.?\s*$")),
+        ("Heart Problem", R(@"\bheart\b|\bcardi")),      // whole word: not "heartburn"
+        ("Lung Problem",  R(@"\blungs?\b|pulmon|bronch|tubercul|^\s*t\.?\s?b\.?\s*$")),
         ("Autism",   R(@"autis")),
         ("Allergies",R(@"allerg")),
-        ("Liver Problem", R(@"liver|hepat")),
-        ("PCOD / PCOS / Uterus related issues", R(@"pcos|pcod|uter|fibroid")),
+        ("Liver Problem", R(@"\blivers?\b|hepat")),
+        ("PCOD / PCOS / Uterus related issues", R(@"pcos|pcod|\buter(us|ine)\b|fibroid")),
     };
 
     static Regex R(string p) => new(p, RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // ================================================================= entry point
-    public static TransformResult Run(IReadOnlyList<string> headers, IEnumerable<Dictionary<string, object?>> inputRows)
+    public static TransformResult Run(IReadOnlyList<string> headers, IEnumerable<Dictionary<string, object?>> inputRows,
+                                      IReadOnlyCollection<string>? cleanup = null, DateTime? today = null)
     {
+        bool On(string rule) => cleanup != null && cleanup.Contains(rule);
+        var currentDate = (today ?? DateTime.Today).Date;
         var notes = new List<string>();
         var rows  = inputRows.Select(r => new Dictionary<string, object?>(r)).ToList();
         var changes = new List<CellChange>();
@@ -105,16 +134,16 @@ public static class Transformer
         string? Col(string expected) => lookup.TryGetValue(Norm(expected), out var a) ? a : null;
 
         var cUuid = Col("_uuid");
-        void Track(int i, string rule, string column, object? before, object? after) =>
+        void Track(int i, string key, string rule, string column, object? before, object? after) =>
             changes.Add(new CellChange(rows[i].TryGetValue(ExcelIo.RowNumberKey, out var xr) && xr is int excelRow ? excelRow : i + 2,
                 cUuid == null ? null : Text(rows[i], cUuid), rule,
                 Renames.TryGetValue(column, out var rn) ? rn : column,
-                Show(before), Show(after)));
+                Show(before), Show(after), key));
 
         // ---------------------------------------------------- 1. Caste: move 'NT' from the "other" column
         var cCaste = Col(ColCaste);
         var cOtherCaste = Col(ColOtherCaste);
-        if (cCaste != null && cOtherCaste != null)
+        if (On(CleanupRules.CasteNt) && cCaste != null && cOtherCaste != null)
         {
             int n = 0;
             for (int i = 0; i < rows.Count; i++)
@@ -122,8 +151,8 @@ public static class Transformer
                 var r = rows[i];
                 if (Text(r, cOtherCaste) is { } t && t.Equals("NT", StringComparison.OrdinalIgnoreCase))
                 {
-                    Track(i, "Caste: 'NT' moved into Caste", cCaste, Get(r, cCaste), "NT");
-                    Track(i, "Caste: 'NT' moved into Caste", cOtherCaste, Get(r, cOtherCaste), null);
+                    Track(i, CleanupRules.CasteNt, "Caste: 'NT' moved into Caste", cCaste, Get(r, cCaste), "NT");
+                    Track(i, CleanupRules.CasteNt, "Caste: 'NT' moved into Caste", cOtherCaste, Get(r, cOtherCaste), null);
                     r[cCaste] = "NT";
                     r[cOtherCaste] = null;
                     n++;
@@ -135,7 +164,7 @@ public static class Transformer
         // ---------------------------------------------------- 2. Ethnicity: map known "other" values
         var cEth = Col(ColEthnicity);
         var cOtherEth = Col(ColOtherEth);
-        if (cEth != null && cOtherEth != null)
+        if (On(CleanupRules.EthnicityMap) && cEth != null && cOtherEth != null)
         {
             int n = 0;
             for (int i = 0; i < rows.Count; i++)
@@ -144,8 +173,8 @@ public static class Transformer
                 var t = Text(r, cOtherEth);
                 if (t != null && OtherEthnicityMap.TryGetValue(t, out var mapped))
                 {
-                    Track(i, "Ethnicity: 'other' value mapped", cEth, Get(r, cEth), mapped);
-                    Track(i, "Ethnicity: 'other' value mapped", cOtherEth, Get(r, cOtherEth), null);
+                    Track(i, CleanupRules.EthnicityMap, "Ethnicity: 'other' value mapped", cEth, Get(r, cEth), mapped);
+                    Track(i, CleanupRules.EthnicityMap, "Ethnicity: 'other' value mapped", cOtherEth, Get(r, cOtherEth), null);
                     r[cEth] = mapped;
                     r[cOtherEth] = null;
                     n++;
@@ -156,7 +185,7 @@ public static class Transformer
 
         // ---------------------------------------------------- 3. Disease free-text -> category
         var cDisease = Col(ColOtherDisease);
-        if (cDisease != null)
+        if (On(CleanupRules.DiseaseClassify) && cDisease != null)
         {
             int changed = 0;
             for (int i = 0; i < rows.Count; i++)
@@ -167,7 +196,7 @@ public static class Transformer
                 var cat = ClassifyDisease(t);
                 if (cat != null && cat != t)
                 {
-                    Track(i, "Other disease/symptoms: classified", cDisease, Get(r, cDisease), cat);
+                    Track(i, CleanupRules.DiseaseClassify, "Other disease/symptoms: classified", cDisease, Get(r, cDisease), cat);
                     r[cDisease] = cat; changed++;
                 }
             }
@@ -180,13 +209,18 @@ public static class Transformer
         bool hasAge = cDob != null;
         if (hasAge)
         {
+            // age on the day the form was filled in ('today' column); the current date only when that is missing
+            int fallback = 0;
             foreach (var r in rows)
             {
                 var dob = AsDate(Get(r, cDob!));
-                var on  = DateTime.Today;
-                r[OutAge] = (dob, on) is ({ } d, { } o) ? YearsBetween(d, o) : null;
+                var formDate = cToday == null ? null : AsDate(Get(r, cToday));
+                if (formDate == null && dob != null) fallback++;
+                var on = formDate?.Date ?? currentDate;
+                r[OutAge] = dob is { } d && d.Date <= on ? YearsBetween(d, on) : null;
             }
             if (cToday == null) notes.Add("Age: no 'today' column found, used the current date.");
+            else if (fallback > 0) notes.Add($"Age: {fallback} row(s) have no form date ('today'), used the current date for those.");
         }
         else notes.Add("Age was not calculated: 'Date Of Birth' column not found.");
 
@@ -225,7 +259,7 @@ public static class Transformer
         if (hasRatioR) InsertAfter(hasRatioL ? OutRatioL : (cIndexR ?? headers.LastOrDefault()), OutRatioR);
 
         // ---------------------------------------------------- 6. Drop "other" columns that ended up empty
-        foreach (var c in new[] { cOtherCaste, cOtherEth })
+        foreach (var c in On(CleanupRules.DropEmptyOther) ? new[] { cOtherCaste, cOtherEth } : Array.Empty<string?>())
         {
             if (c != null && rows.All(r => Text(r, c) == null))
             {
@@ -306,17 +340,40 @@ public static class Transformer
         var v => Convert.ToString(v, CultureInfo.InvariantCulture)
     };
 
-    static readonly string[] DayFirstFormats = { "dd/MM/yyyy", "d/M/yyyy", "dd-MM-yyyy", "d-M-yyyy", "dd.MM.yyyy", "d.M.yyyy" };
+    // the form is filled in India: numeric dates typed as text are day-first ("05/12/1990" = 5 December)
+    static readonly string[] DayFirstFormats = BuildDayFirstFormats();
+    static readonly string[] IsoFormats = { "yyyy-MM-dd", "yyyy-M-d", "yyyy/MM/dd", "yyyy/M/d", "yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-ddTHH:mm:ss" };
 
-    static DateTime? AsDate(object? v) => v switch
+    static string[] BuildDayFirstFormats()
     {
-        DateTime d => d,
-        double n   => FromSerial(n),
-        string s when DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => d,
-        // "25/12/1990" style text (day first) is not understood by the invariant parser above
-        string s when DateTime.TryParseExact(s.Trim(), DayFirstFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => d,
-        _ => null
-    };
+        var list = new List<string>();
+        foreach (var sep in new[] { "/", "-", "." })
+            foreach (var d in new[] { "dd", "d" })
+                foreach (var m in new[] { "MM", "M" })
+                    foreach (var y in new[] { "yyyy", "yy" })
+                        foreach (var time in new[] { "", " HH:mm", " HH:mm:ss", " H:mm" })
+                            list.Add($"{d}{sep}{m}{sep}{y}{time}");
+        return list.ToArray();
+    }
+
+    /// cell value -> date. Text dates: day-first numeric, then ISO, then written-out month names.
+    internal static DateTime? AsDate(object? v)
+    {
+        switch (v)
+        {
+            case DateTime d: return d;
+            case double n: return FromSerial(n);
+            case string raw:
+                var s = raw.Trim();
+                if (s.Length == 0) return null;
+                if (DateTime.TryParseExact(s, DayFirstFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dayFirst)) return dayFirst;
+                if (DateTime.TryParseExact(s, IsoFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var iso)) return iso;
+                // "12 Dec 1990", "December 12, 1990"; purely numeric text was handled above and is never read month-first
+                if (s.Any(char.IsLetter) && DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var named)) return named;
+                return null;
+            default: return null;
+        }
+    }
 
     /// an Excel serial number outside the valid date range (e.g. a phone number typed in the DOB column) becomes "no date" instead of failing the whole upload
     static DateTime? FromSerial(double n)
@@ -336,7 +393,7 @@ public static class Transformer
     };
 
     /// whole years completed between birth date and the reference date
-    static int YearsBetween(DateTime dob, DateTime on)
+    internal static int YearsBetween(DateTime dob, DateTime on)
     {
         int years = on.Year - dob.Year;
         if (dob.Date.AddYears(years) > on.Date) years--;
