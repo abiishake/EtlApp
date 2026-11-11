@@ -13,7 +13,7 @@
     document.documentElement.setAttribute("data-theme", t);
   })();
 </script>
-<link rel="stylesheet" href="app.css?v=3">
+<link rel="stylesheet" href="app.css?v=4">
 </head>
 <body>
 <header class="appbar">
@@ -31,14 +31,15 @@
   <h1 class="sr-only">Research Form ETL</h1>
   <p class="sub">Upload the Excel file, optionally filter the rows, pick the columns you want, then preview and export the transformed workbook. Values are kept as uploaded unless you switch on clean-up rules.</p>
 
+  <div id="topbar" class="topbar">
   <nav id="stepper" class="stepper" aria-label="Progress">
     <ol>
       <li data-target="uploadCard"><span>Upload</span></li>
       <li data-target="previewCard"><span>Preview &amp; export</span></li>
     </ol>
   </nav>
-
   <div id="summary" class="summary hidden" aria-label="Workbook summary"></div>
+  </div>
 
   <section id="uploadCard" class="card">
     <h2><span class="step">1</span>Upload Excel workbook</h2>
@@ -160,6 +161,6 @@
 </div>
 
 <script src="auth.js?v=1"></script>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

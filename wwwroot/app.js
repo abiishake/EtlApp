@@ -878,6 +878,10 @@
       if (i === cur) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
     });
   }
+  // the pinned step bar + summary change height (summary appears after upload): keep "jump to section" clear of them
+  const syncStickyHeight = () => document.documentElement.style.setProperty("--sticky-h", ($("topbar").offsetHeight + 12) + "px");
+  try { new ResizeObserver(syncStickyHeight).observe($("topbar")); } catch { }
+  syncStickyHeight();
   window.addEventListener("scroll", updateStepper, { passive: true });
   window.addEventListener("resize", updateStepper);
   updateStepper();
