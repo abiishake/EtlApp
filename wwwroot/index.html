@@ -13,10 +13,11 @@
     document.documentElement.setAttribute("data-theme", t);
   })();
 </script>
-<link rel="stylesheet" href="app.css?v=4">
+<link rel="stylesheet" href="app.css?v=5">
 </head>
 <body>
 <header class="appbar">
+  <button id="navToggle" class="navtoggle" type="button" aria-label="Open navigation" aria-controls="sidenav" aria-expanded="false">☰</button>
   <div class="brand"><span class="logo" aria-hidden="true">X</span><span>Research Form ETL</span></div>
   <div class="ctx hidden" id="hdrCtx"><span aria-hidden="true">/</span><b id="hdrFile"></b></div>
   <div class="spacer"></div>
@@ -27,17 +28,30 @@
   </button>
   <button id="logoutBtn" type="button" class="mini">Sign out</button>
 </header>
+<div class="layout">
+<aside id="sidenav" class="sidenav" aria-label="Sections">
+  <nav aria-label="Progress">
+    <ol id="stepper" class="navsteps">
+      <li data-target="uploadCard"><span>Upload Excel workbook</span></li>
+      <li data-target="previewCard"><span>Preview &amp; export</span></li>
+    </ol>
+    <div class="navsub" role="group" aria-label="Preview configuration">
+      <button type="button" data-pv-panel="filter" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">⌕</span>Filter</button>
+      <button type="button" data-pv-panel="sort" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">↕</span>Sort</button>
+      <button type="button" data-pv-panel="columns" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">☷</span>Columns</button>
+      <button type="button" data-pv-panel="rename" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">✎</span>Rename</button>
+      <button type="button" data-pv-panel="sheets" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">▤</span>Sheets &amp; setups</button>
+      <button type="button" id="openCleanup" title="Opens the optional clean-up rules in a new tab"><span class="ni" aria-hidden="true">⚑</span>Clean-up rules ↗</button>
+      <button type="button" data-pv-panel="more" aria-expanded="false" aria-controls="pvPanel"><span class="ni" aria-hidden="true">⋯</span>More</button>
+    </div>
+  </nav>
+</aside>
+<div id="navBackdrop" class="navbackdrop" hidden></div>
 <main>
   <h1 class="sr-only">Research Form ETL</h1>
   <p class="sub">Upload the Excel file, optionally filter the rows, pick the columns you want, then preview and export the transformed workbook. Values are kept as uploaded unless you switch on clean-up rules.</p>
 
   <div id="topbar" class="topbar">
-  <nav id="stepper" class="stepper" aria-label="Progress">
-    <ol>
-      <li data-target="uploadCard"><span>Upload</span></li>
-      <li data-target="previewCard"><span>Preview &amp; export</span></li>
-    </ol>
-  </nav>
   <div id="summary" class="summary hidden" aria-label="Workbook summary"></div>
   </div>
 
@@ -62,15 +76,6 @@
   <section id="previewCard" class="card hidden">
     <h2><span class="step">2</span>Preview &amp; export<span class="badge editing-badge"></span></h2>
     <p class="help">The first rows of the active worksheet, exactly as they will be exported. Column headers show the output name; the original name appears underneath when renamed.</p>
-    <div class="pvactions" role="group" aria-label="Preview configuration">
-      <button type="button" data-pv-panel="filter" aria-expanded="false" aria-controls="pvPanel">⌕ Filter</button>
-      <button type="button" data-pv-panel="sort" aria-expanded="false" aria-controls="pvPanel">↕ Sort</button>
-      <button type="button" data-pv-panel="columns" aria-expanded="false" aria-controls="pvPanel">☷ Columns</button>
-      <button type="button" data-pv-panel="rename" aria-expanded="false" aria-controls="pvPanel">✎ Rename</button>
-      <button type="button" data-pv-panel="sheets" aria-expanded="false" aria-controls="pvPanel">▤ Sheets &amp; setups</button>
-      <button type="button" id="openCleanup" title="Opens the optional clean-up rules in a new tab">⚑ Clean-up rules ↗</button>
-      <button type="button" data-pv-panel="more" aria-expanded="false" aria-controls="pvPanel">⋯ More</button>
-    </div>
     <div class="pvsummary"><span id="pvFilterSummary" title="No filters applied">No filters applied</span><button id="pvEditFilters" class="mini">Add filter</button><button id="pvClearFilters" class="mini">Clear</button></div>
     <div id="pvCounts" role="status" aria-live="polite"></div>
     <div id="pvControlStore" hidden>
@@ -150,6 +155,7 @@
     <div id="pvTabs" class="sheetbar" role="tablist" aria-label="Worksheet being previewed"></div>
   </section>
 </main>
+</div>
 
 <div id="dl" class="dl hidden" role="region" aria-label="Export">
   <label for="fileName" class="opt">Workbook file name</label>
@@ -161,6 +167,6 @@
 </div>
 
 <script src="auth.js?v=1"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

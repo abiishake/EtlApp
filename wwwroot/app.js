@@ -838,7 +838,12 @@
       if ($("notes").classList.contains("hidden")) $("pvPanelBody").append(el("p", "empty", "No transformation changes reported for this upload."));
     }
   }
-  document.querySelectorAll("[data-pv-panel]").forEach(b => b.onclick = () => previewPanel === b.dataset.pvPanel ? closePreviewPanel() : openPreviewPanel(b.dataset.pvPanel));
+  // left navigation: open the chosen panel (or go back to it when it is already open) and bring it into view
+  document.querySelectorAll("[data-pv-panel]").forEach(b => b.onclick = () => {
+    if (previewPanel !== b.dataset.pvPanel) openPreviewPanel(b.dataset.pvPanel);
+    closeNav();
+    $("pvPanel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  });
   $("pvClosePanel").onclick = () => closePreviewPanel();
   $("pvPanel").addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); closePreviewPanel(); } });
   $("savedToggle").onclick = () => { const expanded = $("savedToggle").getAttribute("aria-expanded") !== "true"; $("savedToggle").setAttribute("aria-expanded", String(expanded)); $("savedContent").hidden = !expanded; };
@@ -853,11 +858,27 @@
     $("pvCounts").replaceChildren(el("span", null, `Total rows: ${fmt(totalRows)}`), el("span", null, `Matching rows: ${matching}`), el("span", null, `Showing: ${shown}`));
   }
 
-  // ------------------------------------------------------------------ step bar
+  // ------------------------------------------------------------------ left navigation (a drawer on narrow screens)
+  function closeNav() {
+    $("sidenav").classList.remove("open"); $("navBackdrop").hidden = true;
+    $("navToggle").setAttribute("aria-expanded", "false"); $("navToggle").setAttribute("aria-label", "Open navigation");
+  }
+  $("navToggle").onclick = () => {
+    const open = !$("sidenav").classList.contains("open");
+    if (!open) return closeNav();
+    $("sidenav").classList.add("open"); $("navBackdrop").hidden = false;
+    $("navToggle").setAttribute("aria-expanded", "true"); $("navToggle").setAttribute("aria-label", "Close navigation");
+    $("sidenav").querySelector("li:not(.locked), button:not(:disabled)")?.focus();
+  };
+  $("navBackdrop").onclick = closeNav;
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && $("sidenav").classList.contains("open")) { closeNav(); $("navToggle").focus(); } });
+
   const STEP_LIS = [...document.querySelectorAll("#stepper li")];
   STEP_LIS.forEach(li => {
     li.onclick = () => {
       const s = $(li.dataset.target);
+      if (li.classList.contains("locked")) return;
+      closeNav();
       if (li.dataset.target !== "previewCard") closePreviewPanel(false);
       if (!s.classList.contains("hidden")) s.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     };
@@ -868,6 +889,7 @@
     let cur = 0;
     secs.forEach((s, i) => { if (!s.classList.contains("hidden") && s.getBoundingClientRect().top < window.innerHeight * 0.4) cur = i; });
     if (!sessionId) cur = 0;
+    document.querySelectorAll(".navsub button").forEach(b => { b.disabled = !sessionId; b.title = sessionId ? (b.id === "openCleanup" ? "Opens the optional clean-up rules in a new tab" : "") : "Upload a workbook first"; });
     STEP_LIS.forEach((li, i) => {
       const locked = secs[i].classList.contains("hidden");
       li.classList.toggle("locked", locked);
@@ -878,7 +900,7 @@
       if (i === cur) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
     });
   }
-  // the pinned step bar + summary change height (summary appears after upload): keep "jump to section" clear of them
+  // the pinned summary changes height (summary appears after upload): keep "jump to section" clear of them
   const syncStickyHeight = () => document.documentElement.style.setProperty("--sticky-h", ($("topbar").offsetHeight + 12) + "px");
   try { new ResizeObserver(syncStickyHeight).observe($("topbar")); } catch { }
   syncStickyHeight();
@@ -1014,7 +1036,7 @@
       : "Values are exactly as uploaded (no clean-up rules applied).";
     $("cleanupHint").classList.remove("hidden");
   }
-  $("openCleanup").onclick = () => { if (sessionId) window.open($("cleanupLink").href, "_blank", "noopener"); };
+  $("openCleanup").onclick = () => { if (sessionId) { closeNav(); window.open($("cleanupLink").href, "_blank", "noopener"); } };
 
   // the clean-up page changed the table: reload the column info, keep everything the user set up where it still fits
   function applySessionUpdate(data) {
