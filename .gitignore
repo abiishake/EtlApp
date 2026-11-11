@@ -5,3 +5,5 @@ obj/
 data/etl.db
 EtlApp.slnx
 TestResults/
+.env
+data/keys/

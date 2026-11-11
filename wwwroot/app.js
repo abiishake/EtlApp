@@ -22,7 +22,7 @@
   let root = { mode: "and", items: [] };
   let dlSeq = 0;
   let matchCount = null, totalRows = 0, filterError = "";
-  let savedFilters = [];     // filters remembered from earlier downloads (SQLite, server side)
+  let savedFilters = [];     // saved filters (SQLite, server side)
   let outputSheets = [];
   let activeSheetIndex = 0;
   let restoringSheet = false;
@@ -128,7 +128,7 @@
       selected.clear();
       renames = {};
       $("renameToggle").checked = false;
-      $("saveFilters").checked = false; $("saveName").value = "";
+      $("saveFilters").checked = false; $("saveName").value = ""; setStatus($("saveFiltersMsg"), "");
       columns.forEach(c => selected.add(c));          // everything selected by default
       root = { mode: "and", items: [] };
       outputSheets = [{ name: "Transformed Data", state: null }];
@@ -181,7 +181,7 @@
     order = normOrder(st?.order); sorts = normSorts(st?.sorts);
     $("renameToggle").checked = st?.renameEnabled || false;
     $("saveFilters").checked = st?.saveFilters || false;
-    $("saveName").value = st?.saveName || "";
+    $("saveName").value = st?.saveName || ""; setStatus($("saveFiltersMsg"), "");
     $("search").value = "";
     restoringSheet = false;
     renderSheetTabs(); renderFilters(); renderColumns(); scheduleCount();
@@ -472,7 +472,7 @@
       const res = await fetch("/api/saved-filters");
       if (!res.ok) throw new Error();
       savedFilters = await res.json();
-    } catch { savedFilters = []; setStatus($("savedMsg"), "Saved filters could not be loaded. Try uploading again or retrying after a download.", "err"); }
+    } catch { savedFilters = []; setStatus($("savedMsg"), "Saved filters could not be loaded. Try again in a moment.", "err"); }
     renderSaved();
   }
 
@@ -549,6 +549,7 @@
     syncSetupName();
     $("saveFilters").checked = true;
     $("saveName").value = sf.name;
+    setStatus($("saveFiltersMsg"), "");
 
     // selected + renamed columns (entries saved before this was stored have none: leave the current choice alone)
     const colsMissing = [];
@@ -883,6 +884,7 @@
 
   function refresh() {
     if (!restoringSheet && activeFilters().length === 0 && $("saveFilters").checked) $("saveFilters").checked = false;   // nothing to remember
+    if (!restoringSheet && activeFilters().length === 0) setStatus($("saveFiltersMsg"), "");
     if (outputSheets.length && !restoringSheet) captureSheet();
     $("count").textContent = `${selected.size} of ${columns.length} selected`;
     $("filterErr").textContent = filterError;
@@ -890,8 +892,9 @@
 
     const hasFilters = activeFilters().length > 0;
     $("saveFilters").disabled = !hasFilters;
-    $("saveName").classList.toggle("hidden", !$("saveFilters").checked);
-    $("saveFiltersLbl").title = hasFilters ? "" : "Add a filter first";
+    $("saveFiltersBtn").disabled = !hasFilters;
+    $("saveFiltersBtn").title = hasFilters ? "Save these filters (with this sheet's columns, renames and sorts) now" : "Add a filter first";
+    $("saveFiltersLbl").title = hasFilters ? "Save the filters again under this name every time the workbook is exported" : "Add a filter first";
     $("dl").classList.toggle("hidden", selected.size === 0);   // export bar appears once something is selected
     const af = activeFilters();
     $("filterSummary").replaceChildren(...(af.length ? [el("b", null, "Keeping rows where: "), document.createTextNode(summarize(af, root.mode))] : []));
@@ -905,6 +908,29 @@
   }
 
   $("saveFilters").onchange = refresh;
+  $("saveName").addEventListener("input", () => captureSheet());
+
+  // save the active sheet's filters right away (no export needed)
+  $("saveFiltersBtn").onclick = async () => {
+    const msg = $("saveFiltersMsg"), af = activeFilters(), name = $("saveName").value.trim();
+    if (!af.length) return setStatus(msg, "Add a filter condition first.", "err");
+    if (!name) { setStatus(msg, "Enter a name for these filters.", "err"); $("saveName").focus(); return; }
+    const existing = savedFilters.find(sf => sf.name.toLowerCase() === name.toLowerCase());
+    if (existing && !confirm(`A saved filter named "${existing.name}" already exists. Replace it?`)) return;
+    captureSheet();
+    const sheet = { sheetName: outputSheets[activeSheetIndex]?.name || "", columns: chosenCols(), columnOrder: [...order], sorts: normSorts(sorts),
+      filters: af, mode: root.mode, renames: $("renameToggle").checked ? renames : {} };
+    $("saveFiltersBtn").disabled = true;
+    try {
+      let res;
+      try { res = await fetch("/api/saved-filters", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: sessionId, name, sheet }) }); }
+      catch { throw new Error("Could not reach the server. Check the connection and try again."); }
+      if (!res.ok) { const d = await readJson(res); throw new Error(d.error || `Could not save the filters (HTTP ${res.status}).`); }
+      setStatus(msg, `Saved filters “${name}”.`, "ok");
+      loadSaved();
+    } catch (e) { setStatus(msg, e.message, "err"); }
+    finally { $("saveFiltersBtn").disabled = activeFilters().length === 0; }
+  };
   $("search").oninput = renderColumns;
   $("renameToggle").onchange = renderColumns;
   $("allBtn").onclick  = () => { columns.forEach(c => selected.add(c)); renderColumns(); };
@@ -936,7 +962,7 @@
       const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
       if (missingFilterName) {
         restoreSheet(outputSheets.findIndex(sh => sh.name === missingFilterName.sheetName));
-        setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or uncheck Remember these filters.`, "err");
+        setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or uncheck Also update on export.`, "err");
         openPreviewPanel("filter"); $("saveName").focus(); setPill("failed", "Export needs a filter name");
         return;
       }

@@ -1,8 +1,12 @@
 using EtlApp.Etl;
 using System.Globalization;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 
 const long MaxUploadBytes = 20L * 1024 * 1024;
@@ -19,42 +23,98 @@ if (args.Contains("--healthcheck"))
     catch { return 1; }
 }
 
+// `dotnet run` locally: read APP_USERNAME / APP_PASSWORD from a .env file next to the app (docker compose passes them via env_file).
+// Variables already set in the environment win.
+LoadDotEnv(Path.Combine(Directory.GetCurrentDirectory(), ".env"));
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = MaxUploadBytes);
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = MaxUploadBytes);
 builder.Services.AddSingleton<SessionStore>();
 builder.Services.AddSingleton<SavedFilterStore>();
 
+// Single login (APP_USERNAME / APP_PASSWORD). The sign-in cookie is encrypted with keys kept in DATA_DIR, so a restart does not log you out.
+var loginUser = builder.Configuration["APP_USERNAME"]?.Trim();
+var loginPassword = builder.Configuration["APP_PASSWORD"];
+if (string.IsNullOrEmpty(loginUser) || string.IsNullOrEmpty(loginPassword))
+{
+    // thrown (not just logged) so Visual Studio / docker logs show the reason instead of only "failed to listen on port"
+    throw new InvalidOperationException(
+        $"APP_USERNAME and APP_PASSWORD must be set: copy .env.example to .env in {Directory.GetCurrentDirectory()} and fill them in.");
+}
+var dataDir = builder.Configuration["DATA_DIR"] ?? "data";
+builder.Services.AddDataProtection()
+    .SetApplicationName("EtlApp")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDir, "keys")));
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(o =>
+    {
+        o.Cookie.Name = "etl_auth";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SameSite = SameSiteMode.Strict;           // other sites cannot make the browser send it (no cross-site requests to /api)
+        o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        o.ExpireTimeSpan = TimeSpan.FromHours(12);
+        o.SlidingExpiration = true;
+        o.LoginPath = "/login";
+    });
+
 var app = builder.Build();
 
-// Optional password (APP_PASSWORD): the browser asks once, any user name works. Off when the variable is empty.
-var password = app.Configuration["APP_PASSWORD"];
-if (!string.IsNullOrEmpty(password))
+app.UseAuthentication();
+
+// Everything except the login page, its stylesheet and the health check needs a signed-in user.
+// Pages redirect to the login page; API calls get 401 (the page then sends the user to the login page).
+app.Use(async (ctx, next) =>
 {
-    var expected = SHA256.HashData(Encoding.UTF8.GetBytes(password));
-    app.Use(async (ctx, next) =>
+    var path = ctx.Request.Path;
+    if (ctx.User.Identity?.IsAuthenticated == true || path.StartsWithSegments("/healthz") || path.StartsWithSegments("/login")
+        || path.Equals("/app.css", StringComparison.OrdinalIgnoreCase))
     {
-        if (ctx.Request.Path.StartsWithSegments("/healthz")) { await next(); return; }
-        var header = ctx.Request.Headers.Authorization.ToString();
-        if (header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(header[6..].Trim()));
-                var given = decoded[(decoded.IndexOf(':') + 1)..];
-                if (CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(given)), expected)) { await next(); return; }
-            }
-            catch (FormatException) { }
-        }
+        await next(); return;
+    }
+    if (path.StartsWithSegments("/api"))
+    {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"Research Form ETL\", charset=\"UTF-8\"";
-    });
-}
+        await ctx.Response.WriteAsJsonAsync(new { error = "Your sign-in has expired. Please sign in again." });
+        return;
+    }
+    var back = path + ctx.Request.QueryString;
+    ctx.Response.Redirect("/login" + (back == "/" ? "" : "?returnUrl=" + Uri.EscapeDataString(back)));
+});
 
 app.UseDefaultFiles();   // serves wwwroot/index.html at "/"
 app.UseStaticFiles();
 
 app.MapGet("/healthz", () => Results.Ok("ok"));
+
+app.MapGet("/login", (HttpContext ctx) => ctx.User.Identity?.IsAuthenticated == true
+    ? Results.Redirect(SafeReturnUrl(ctx.Request.Query["returnUrl"]))
+    : Results.File(Path.Combine(app.Environment.WebRootPath, "login.html"), "text/html; charset=utf-8"));
+
+var expectedUser = SHA256.HashData(Encoding.UTF8.GetBytes(loginUser));
+var expectedPassword = SHA256.HashData(Encoding.UTF8.GetBytes(loginPassword));
+app.MapPost("/login", async (HttpContext ctx, ILogger<Program> log) =>
+{
+    var form = await ctx.Request.ReadFormAsync();
+    var returnUrl = SafeReturnUrl(form["returnUrl"]);
+    var userOk = CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(form["username"].ToString().Trim())), expectedUser);
+    var passOk = CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(form["password"].ToString())), expectedPassword);
+    if (!(userOk & passOk))
+    {
+        log.LogWarning("Failed sign-in from {Ip}", ctx.Connection.RemoteIpAddress);
+        await Task.Delay(1000);                            // slows down password guessing
+        return Results.Redirect("/login?error=1" + (returnUrl == "/" ? "" : "&returnUrl=" + Uri.EscapeDataString(returnUrl)));
+    }
+    var identity = new ClaimsIdentity(new[] { new Claim(ClaimTypes.Name, loginUser) }, CookieAuthenticationDefaults.AuthenticationScheme);
+    await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
+    return Results.Redirect(returnUrl);
+});
+
+app.MapPost("/api/logout", async (HttpContext ctx) =>
+{
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok();
+});
 
 // only one workbook is parsed at a time: parsing is the memory-hungry step
 var uploadGate = new SemaphoreSlim(1, 1);
@@ -208,7 +268,7 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
             .Select(sheet => sheet.FilterName?.Trim() ?? "")
             .ToList();
         if (requestedFilterNames.Any(string.IsNullOrWhiteSpace))
-            return Results.BadRequest(new { error = "Enter a filter name for every sheet where Remember these filters is selected." });
+            return Results.BadRequest(new { error = "Enter a filter name for every sheet where Also update on export is selected." });
         var duplicateFilterName = requestedFilterNames
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
@@ -230,17 +290,12 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
             if (dup != null) throw new ArgumentException($"Sheet '{sheetName}' has duplicate column name '{dup.Key}' after renaming.");
             exports.Add(new ExcelIo.SheetExport(sheetName, data with { Rows = rows }, cols, headers));
 
-            var active = Filtering.Active(sheet.Filters);
-            if (sheet.SaveFilters == true && active.Count > 0)
+            if (sheet.SaveFilters == true && Filtering.Active(sheet.Filters).Count > 0)
             {
                 var filterName = sheet.FilterName!.Trim();
                 if (filterName.Length > 100)
                     throw new ArgumentException($"Filter name for sheet '{sheetName}' must be 100 characters or fewer.");
-                var keptRenames = new Dictionary<string, string>();       // only columns that actually got a new header
-                for (var i = 0; i < cols.Count; i++)
-                    if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
-                var mode = string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and";
-                pendingSaves.Add(() => saved.Save(filterName, sheetName.Length > 0 ? sheetName : "Sheet", mode, active, cols, keptRenames, sheet.Sorts, sheet.ColumnOrder));
+                pendingSaves.Add(() => SaveSheetFilters(saved, filterName, sheet, cols, headers));
             }
         }
         var bytes = ExcelIo.WriteMultiple(exports);
@@ -259,7 +314,32 @@ app.MapPost("/api/export-multiple", (MultiExportRequest body, SessionStore store
     catch (Exception ex) { log.LogError(ex, "Multi-sheet export failed"); return Results.Problem("Could not create the workbook."); }
 });
 
-// 4) Filters remembered from earlier downloads (newest first)
+// 4) Save the current sheet's filters (with its columns, renames and sorts) right now, without exporting
+app.MapPost("/api/saved-filters", (SaveFilterRequest body, SessionStore store, SavedFilterStore saved, ILogger<Program> log) =>
+{
+    var data = store.Get(body.Id ?? "");
+    if (data == null) return Expired();
+    var name = body.Name?.Trim() ?? "";
+    if (name.Length == 0) return Results.BadRequest(new { error = "Enter a name for these filters." });
+    if (name.Length > 100) return Results.BadRequest(new { error = "Filter names must be 100 characters or fewer." });
+    var sheet = body.Sheet;
+    if (sheet == null || Filtering.Active(sheet.Filters).Count == 0) return Results.BadRequest(new { error = "Add at least one filter condition first." });
+    try
+    {
+        Filtering.Apply(data, sheet.Filters, sheet.Mode);   // rejects filters that do not fit this file
+        var cols = OrderedColumns(data.Columns, sheet.Columns);
+        SaveSheetFilters(saved, name, sheet, cols, OutputHeaders(cols, sheet.Renames));
+        return Results.Ok(new { name });
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Could not save filters");
+        return Results.Json(new { error = "Could not save the filters on the server." }, statusCode: 500);
+    }
+});
+
+// 4a) Saved filters (newest first)
 app.MapGet("/api/saved-filters", (SavedFilterStore saved, ILogger<Program> log) =>
 {
     try { return Results.Ok(saved.List()); }
@@ -323,6 +403,39 @@ app.MapDelete("/api/workflows/{id:long}", (long id, SavedFilterStore saved, ILog
         return Results.Json(new { error = "Could not delete." }, statusCode: 500);
     }
 });
+
+// remembers a sheet's filters with its selected columns, the renamed ones only, sorts and column order
+static void SaveSheetFilters(SavedFilterStore saved, string filterName, SheetExportRequest sheet, List<string> cols, List<string> headers)
+{
+    var keptRenames = new Dictionary<string, string>();
+    for (var i = 0; i < cols.Count; i++)
+        if (headers[i] != cols[i]) keptRenames[cols[i]] = headers[i];
+    var mode = string.Equals(sheet.Mode, "or", StringComparison.OrdinalIgnoreCase) ? "or" : "and";
+    var sheetName = (sheet.SheetName ?? "").Trim();
+    saved.Save(filterName, sheetName.Length > 0 ? sheetName : "Sheet", mode, Filtering.Active(sheet.Filters), cols, keptRenames, sheet.Sorts, sheet.ColumnOrder);
+}
+
+// only same-site paths ("/x", not "//evil.com" or "http://...") so the login cannot bounce the user to another site
+static string SafeReturnUrl(string? url) =>
+    !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\") ? url : "/";
+
+// minimal .env reader: KEY=VALUE lines, # comments, optional surrounding quotes
+static void LoadDotEnv(string path)
+{
+    if (!File.Exists(path)) return;
+    foreach (var raw in File.ReadAllLines(path))
+    {
+        var line = raw.Trim();
+        if (line.Length == 0 || line.StartsWith('#')) continue;
+        if (line.StartsWith("export ")) line = line[7..].TrimStart();
+        var eq = line.IndexOf('=');
+        if (eq <= 0) continue;
+        var key = line[..eq].Trim();
+        var value = line[(eq + 1)..].Trim();
+        if (value.Length >= 2 && (value[0] == '"' || value[0] == '\'') && value[^1] == value[0]) value = value[1..^1];
+        if (Environment.GetEnvironmentVariable(key) == null) Environment.SetEnvironmentVariable(key, value);
+    }
+}
 
 static IResult Expired() => Results.NotFound(new { error = "This upload has expired (uploads are kept for 1 hour after last use). Please upload the file again." });
 
@@ -407,6 +520,7 @@ record CountRequest(string? Id, List<FilterSpec>? Filters, string? Mode);
 record PreviewRequest(string? Id, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, int? Limit, List<SortSpec>? Sorts);
 record CleanupRequest(List<string>? Rules);
 record WorkflowRequest(string? Name, JsonElement? Workflow);
+record SaveFilterRequest(string? Id, string? Name, SheetExportRequest? Sheet);
 
 record MultiExportRequest(string? Id, string? FileName, List<SheetExportRequest>? Sheets);
 record SheetExportRequest(string? SheetName, List<string>? Columns, List<FilterSpec>? Filters, Dictionary<string, string>? Renames, string? Mode, bool? SaveFilters, string? FilterName, List<SortSpec>? Sorts, List<string>? ColumnOrder = null);

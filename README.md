@@ -9,6 +9,7 @@ changes, and apply. Unticking a rule and applying again restores the original va
 ## Run
 Only Docker + Docker Compose are needed on the server (no .NET install).
 
+    cp .env.example .env     # then edit .env: set APP_USERNAME and APP_PASSWORD
     docker compose up -d --build
 
 Open http://localhost:8085 (or http://<server-ip>:8085 from another device).
@@ -18,16 +19,19 @@ Open http://localhost:8085 (or http://<server-ip>:8085 from another device).
 Uploads are kept in memory for 1 hour after you last use them, then discarded. Limits: 20 MB per file and
 1,000,000 cells (rows x columns) per sheet; when several uploads are open, the least recently used ones are dropped first.
 
-The only thing stored on disk is the saved filters and saved setups (SQLite file `./data/etl.db`, mounted into the container at `/data`).
+The only things stored on disk are the saved filters and saved setups (SQLite file `./data/etl.db`) and the sign-in cookie keys (`./data/keys`), both in `./data`, mounted into the container at `/data`.
 First run on the server (`docker-compose.yml` runs the container as user `1000:1000`, so the data folder must belong to that user; if your Debian user is different, change `user:` in the compose file and the numbers below to match):
 
     mkdir -p data && sudo chown 1000:1000 data
 
 Backup: stop the container and copy `data/etl.db`, or run `sqlite3 data/etl.db ".backup 'etl-backup.db'"` while it is running.
 
-### Password (optional)
-There is no login by default, so keep it on your LAN. To make the browser ask for a password, set `APP_PASSWORD`
-in `docker-compose.yml` (any user name is accepted) and run `docker compose up -d` again.
+### Login
+The app has a single login, read from `APP_USERNAME` and `APP_PASSWORD` in `.env` (copy `.env.example` to `.env`;
+`.env` is git-ignored and not baked into the image). The app will not start without them. To change the login, edit
+`.env` and run `docker compose up -d` again. Sign-ins last 12 hours (renewed while you use the app); the cookie keys are
+kept in `data/keys`, so restarting the container does not log you out. For `dotnet run` locally, the same `.env` file in
+the project folder is read automatically.
 
 ## Where things live
 - `Etl/Transformer.cs` - every rule from the "Instructions For AI" sheet: renames, calculated columns (Age, Is Sample Twin,

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Research Form ETL</title>
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("etl-theme"); } catch (e) { }
+    if (t !== "light" && t !== "dark") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="stylesheet" href="app.css?v=3">
+<style>
+  .login-wrap { min-height:100vh; display:grid; place-items:center; padding:16px; }
+  .login { width:100%; max-width:360px; }
+  .login .brand { display:flex; align-items:center; gap:10px; font-weight:600; font-size:16px; margin-bottom:14px; }
+  .login label { display:block; font-size:13px; font-weight:500; margin:12px 0 4px; }
+  .login input[type=text], .login input[type=password] { width:100%; }
+  .login input[type=password] { height:var(--h-ctl); padding:0 10px; border:1px solid var(--color-border-strong); border-radius:6px; background:var(--color-surface); }
+  .login button.primary { width:100%; margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <form class="card login" method="post" action="/login">
+    <div class="brand"><span class="logo" aria-hidden="true">X</span><h1 style="font-size:16px;margin:0">Research Form ETL</h1></div>
+    <p class="help" style="margin:0">Sign in to continue.</p>
+    <input type="hidden" name="returnUrl" id="returnUrl">
+    <label for="username">User name</label>
+    <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+    <div id="err" class="status err" role="alert"></div>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+</div>
+<script>
+  var q = new URLSearchParams(location.search);
+  document.getElementById("returnUrl").value = q.get("returnUrl") || "/";
+  if (q.get("error")) document.getElementById("err").textContent = "Incorrect user name or password.";
+  document.querySelector("form").addEventListener("submit", function () { this.querySelector("button").disabled = true; });
+</script>
+</body>
+</html>
