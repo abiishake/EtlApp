@@ -40,7 +40,7 @@ the project folder is read automatically.
 - `Etl/Filtering.cs` - column types (text / number / date) and the filters.
 - `wwwroot/index.html` + `app.js` + `app.css` - the main page; `cleanup.html` - clean-up rules; `changes.html` - every changed cell.
 
-Age is the age on the form date (`today` column); rows without a form date use the server's current date.
+Age is the age on the day the file is processed (the server's current date); the form's `today` column is not used.
 Dates typed as text are read day-first (`05/12/1990` = 5 December 1990).
 
 ## Tests
