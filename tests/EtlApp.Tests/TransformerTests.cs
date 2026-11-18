@@ -120,32 +120,33 @@ public class TransformerTests
     public void Serial_numbers_out_of_range_are_null() => Assert.Null(Transformer.AsDate(9_999_999_999d));
 
     [Fact]
-    public void Age_uses_the_form_date()
+    public void Age_uses_the_run_date_not_the_form_date()
     {
-        var r = Transformer.Run(Headers, new[] { Row("a", today: new DateTime(2020, 6, 1), dob: new DateTime(2000, 6, 2)) },
-                                today: new DateTime(2030, 1, 1));
-        Assert.Equal(19, r.Rows[0]["Age"]);   // one day before the 20th birthday on the form date
+        // Priya Pal case: form filled 2023-12-31 (17 then), processed 2026-11-19 -> 20
+        var r = Transformer.Run(Headers, new[] { Row("a", today: new DateTime(2023, 12, 31), dob: new DateTime(2006, 11, 1)) },
+                                today: new DateTime(2026, 11, 19));
+        Assert.Equal(20, r.Rows[0]["Age"]);
+        Assert.Contains(r.Notes, n => n.Contains("2026-11-19"));
     }
 
     [Fact]
-    public void Age_falls_back_to_current_date_without_form_date()
+    public void Age_works_without_form_date()
     {
         var r = Transformer.Run(Headers, new[] { Row("a", today: null, dob: new DateTime(2000, 1, 1)) }, today: new DateTime(2030, 1, 1));
         Assert.Equal(30, r.Rows[0]["Age"]);
-        Assert.Contains(r.Notes, n => n.Contains("no form date"));
     }
 
     [Fact]
     public void Age_with_text_dob_is_day_first()
     {
-        var r = Transformer.Run(Headers, new[] { Row("a", today: new DateTime(1991, 6, 1), dob: "05/12/1990") });
+        var r = Transformer.Run(Headers, new[] { Row("a", dob: "05/12/1990") }, today: new DateTime(1991, 6, 1));
         Assert.Equal(0, r.Rows[0]["Age"]);   // born 5 Dec 1990 -> 0 on 1 Jun 1991 (would be 1 if read as 12 May)
     }
 
     [Fact]
-    public void Age_is_blank_when_birth_is_after_form_date()
+    public void Age_is_blank_when_birth_is_after_run_date()
     {
-        var r = Transformer.Run(Headers, new[] { Row("a", today: new DateTime(2000, 1, 1), dob: new DateTime(2001, 1, 1)) });
+        var r = Transformer.Run(Headers, new[] { Row("a", dob: new DateTime(2001, 1, 1)) }, today: new DateTime(2000, 1, 1));
         Assert.Null(r.Rows[0]["Age"]);
     }
 
