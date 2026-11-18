@@ -52,6 +52,7 @@ public static class Transformer
     public const string IdColumn = "Id";
 
     // ---------------------------------------------------------------- source column names
+    const string ColToday        = "today";
     const string ColDob          = "Date Of Birth";
     const string ColCaste        = "Caste";
     const string ColOtherCaste   = "Enter Other Caste";
@@ -203,17 +204,23 @@ public static class Transformer
         }
 
         // ---------------------------------------------------- 4. Calculated columns
+        var cToday = Col(ColToday);
         var cDob   = Col(ColDob);
         bool hasAge = cDob != null;
         if (hasAge)
         {
-            // age as of the day the tool is run (not the form's 'today' column)
+            // age on the day the form was filled in ('today' column); the current date only when that is missing
+            int fallback = 0;
             foreach (var r in rows)
             {
                 var dob = AsDate(Get(r, cDob!));
-                r[OutAge] = dob is { } d && d.Date <= currentDate ? YearsBetween(d, currentDate) : null;
+                var formDate = cToday == null ? null : AsDate(Get(r, cToday));
+                if (formDate == null && dob != null) fallback++;
+                var on = formDate?.Date ?? currentDate;
+                r[OutAge] = dob is { } d && d.Date <= on ? YearsBetween(d, on) : null;
             }
-            notes.Add($"Age: calculated as of {currentDate:yyyy-MM-dd} (the date this file was processed).");
+            if (cToday == null) notes.Add("Age: no 'today' column found, used the current date.");
+            else if (fallback > 0) notes.Add($"Age: {fallback} row(s) have no form date ('today'), used the current date for those.");
         }
         else notes.Add("Age was not calculated: 'Date Of Birth' column not found.");
 
