@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 namespace EtlApp.Etl;
 
@@ -76,7 +77,7 @@ public static class Filtering
                 if (sub.Count > 0)
                     result.Add(new FilterSpec(null, null, null, IsOr(f.Mode) ? "or" : "and", sub));
             }
-            else if (!string.IsNullOrWhiteSpace(f.Value))
+            else if (!string.IsNullOrWhiteSpace(f.Value) && !(f.Op == "in" && IsEmptyList(f.Value!)))
                 result.Add(new FilterSpec(f.Column, f.Op, f.Value!.Trim()));
         }
         return result;
@@ -106,6 +107,35 @@ public static class Filtering
         var type = ColumnType(data, col);
         bool isNumber = type == "number";
         var val = f.Value!.Trim();
+
+        if (f.Op == "in")
+        {
+            var list = ParseList(val);
+            if (type == "date")
+            {
+                var days = new HashSet<DateTime>();
+                foreach (var s in list)
+                {
+                    if (!DateTime.TryParseExact(s, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+                        throw new ArgumentException($"'{s}' is not a date (use YYYY-MM-DD, column '{col}').");
+                    days.Add(d.Date);
+                }
+                return r => r.TryGetValue(col, out var v) && v is DateTime dt && days.Contains(dt.Date);
+            }
+            if (isNumber)
+            {
+                var nums = new List<double>();
+                foreach (var s in list)
+                {
+                    if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+                        throw new ArgumentException($"'{s}' is not a number (column '{col}').");
+                    nums.Add(x);
+                }
+                return r => Num(r, col) is { } x && nums.Any(n => Math.Abs(x - n) < 1e-9);
+            }
+            var texts = new HashSet<string>(list, StringComparer.OrdinalIgnoreCase);
+            return r => Shown(r, col)?.Trim() is { } t && texts.Contains(t);
+        }
 
         if (type == "date")
         {
@@ -159,6 +189,28 @@ public static class Filtering
     }
 
     // ------------------------------------------------------------------ helpers
+    /// Values of an "in" filter: a JSON array (what the page sends, safe for values containing commas)
+    /// or a plain comma-separated list. Trimmed, blanks and duplicates dropped.
+    public static List<string> ParseList(string value)
+    {
+        var v = value.Trim();
+        IEnumerable<string?> items;
+        if (v.StartsWith('['))
+        {
+            try { items = JsonSerializer.Deserialize<List<string?>>(v) ?? new(); }
+            catch (JsonException) { throw new ArgumentException($"'{v}' is not a valid list of values."); }
+        }
+        else items = v.Split(',');
+        return items.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    static bool IsEmptyList(string value)
+    {
+        try { return ParseList(value).Count == 0; }
+        catch (ArgumentException) { return false; }     // reported by Apply
+    }
+
     static bool IsNumeric(object v) => v is double or float or int or long or decimal or short;
 
     /// "number" when every non-empty cell is numeric, "date" when every one is a date, otherwise "text" (same rule as Describe)

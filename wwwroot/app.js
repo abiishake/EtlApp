@@ -3,9 +3,9 @@
   const CALCULATED = new Set(["Age", "Is Sample Twin", "Left Hand Ratio (2D:4D)", "Right Hand Ratio (2D:4D)"]);
   const LOCKED = new Set(["Id"]);       // columns that are always exported (cannot be unselected)
   const OPS = {
-    text:   [["contains", "Contains"], ["notContains", "Not Contains"], ["equals", "Equals"], ["notEquals", "Not Equals"]],
-    number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"], ["notEquals", "Not Equals"]],
-    date:   [["eq", "On"], ["notEquals", "Not on"], ["gt", "After"], ["gte", "On or after"], ["lt", "Before"], ["lte", "On or before"]]
+    text:   [["contains", "Contains"], ["notContains", "Not Contains"], ["equals", "Equals"], ["notEquals", "Not Equals"], ["in", "In (any of)"]],
+    number: [["gt", "Greater than"], ["gte", "Greater than or equal"], ["lt", "Less than"], ["lte", "Less than or equal"], ["eq", "Equal"], ["notEquals", "Not Equals"], ["in", "In (any of)"]],
+    date:   [["eq", "On"], ["notEquals", "Not on"], ["gt", "After"], ["gte", "On or after"], ["lt", "Before"], ["lte", "On or before"], ["in", "In (any of)"]]
   };
 
   let sessionId = null;
@@ -27,7 +27,14 @@
   let activeSheetIndex = 0;
   let restoringSheet = false;
   const PREVIEW_ROWS = 10;
-  const OP_TEXT = { contains: "contains", notContains: "does not contain", equals: "=", notEquals: "≠", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤" };
+  const OP_TEXT = { contains: "contains", notContains: "does not contain", equals: "=", notEquals: "≠", eq: "=", gt: ">", gte: "≥", lt: "<", lte: "≤", in: "in" };
+  // an "in" filter keeps its values as a JSON array string, e.g. '["12","33","34"]' (older/hand-typed values may be comma-separated)
+  const parseList = v => {
+    if (!v) return [];
+    try { const a = JSON.parse(v); if (Array.isArray(a)) return a.map(String); } catch { }
+    return String(v).split(",").map(x => x.trim()).filter(Boolean);
+  };
+  const showValue = n => n.op === "in" ? "(" + parseList(n.value).join(", ") + ")" : n.value;
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
@@ -427,7 +434,18 @@
 
     // value
     let valueCtl;
-    if (ci.type === "text" && (f.op === "equals" || f.op === "notEquals") && ci.values) {
+    if (f.op === "in" && ci.values) {
+      valueCtl = makeMultiPick(f, ci);
+    } else if (f.op === "in") {                                                // too many distinct values to list: type them
+      valueCtl = document.createElement("input");
+      valueCtl.type = "text";
+      valueCtl.placeholder = ci.type === "date" ? "e.g. 2024-01-10, 2024-03-02" : "comma-separated, e.g. 12, 33, 34";
+      valueCtl.value = parseList(f.value).join(", ");
+      valueCtl.oninput = valueCtl.onchange = () => {
+        const list = parseList(valueCtl.value), v = list.length ? JSON.stringify(list) : "";
+        if (f.value === v) return; f.value = v; scheduleCount();
+      };
+    } else if (ci.type === "text" && (f.op === "equals" || f.op === "notEquals") && ci.values) {
       valueCtl = makeSelect([["", "— choose a value —"], ...ci.values.map(v => [v.value, `${v.value}  (${fmt(v.count)})`])], f.value);
       valueCtl.onchange = () => { f.value = valueCtl.value; scheduleCount(); };
     } else {
@@ -466,6 +484,57 @@
     return row;
   }
 
+  // "In" value picker: a button that opens a searchable checkbox list of the column's distinct values
+  function makeMultiPick(f, ci) {
+    const wrap = el("div", "msel");
+    const btn = el("button", "msel-btn");
+    btn.type = "button"; btn.setAttribute("aria-haspopup", "true"); btn.setAttribute("aria-expanded", "false");
+    const panel = el("div", "msel-panel hidden");
+    const chosen = new Set(parseList(f.value).map(v => v.toLowerCase()));
+    const label = () => {
+      const picked = ci.values.filter(v => chosen.has(v.value.toLowerCase())).map(v => v.value);
+      btn.textContent = picked.length ? `${picked.length} selected: ${picked.join(", ")}` : "— choose values —";
+      btn.title = picked.join(", ");
+    };
+    const save = () => {
+      const picked = ci.values.filter(v => chosen.has(v.value.toLowerCase())).map(v => v.value);   // keep the column's order
+      f.value = picked.length ? JSON.stringify(picked) : "";
+      label(); scheduleCount();
+    };
+    const search = document.createElement("input");
+    search.type = "search"; search.placeholder = "Search values…"; search.setAttribute("aria-label", "Search values of " + f.column);
+    const allBtn = el("button", "mini", "Select shown"), noneBtn = el("button", "mini", "Clear");
+    allBtn.type = noneBtn.type = "button";
+    const tools = el("div", "msel-tools"); tools.append(search, allBtn, noneBtn);
+    const list = el("div", "msel-list");
+    const boxes = ci.values.map(v => {
+      const lbl = el("label", "msel-item"), cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = chosen.has(v.value.toLowerCase());
+      cb.onchange = () => { cb.checked ? chosen.add(v.value.toLowerCase()) : chosen.delete(v.value.toLowerCase()); save(); };
+      lbl.append(cb, el("span", null, v.value === "" ? "(blank)" : v.value), el("small", null, fmt(v.count)));
+      list.append(lbl);
+      return { v, cb, lbl };
+    });
+    search.oninput = () => {
+      const q = search.value.trim().toLowerCase();
+      boxes.forEach(b => b.lbl.classList.toggle("hidden", q !== "" && !b.v.value.toLowerCase().includes(q)));
+    };
+    allBtn.onclick = () => { boxes.forEach(b => { if (!b.lbl.classList.contains("hidden")) { b.cb.checked = true; chosen.add(b.v.value.toLowerCase()); } }); save(); };
+    noneBtn.onclick = () => { boxes.forEach(b => { b.cb.checked = false; }); chosen.clear(); save(); };
+    const close = () => { panel.classList.add("hidden"); btn.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", outside); };
+    const outside = e => { if (!wrap.contains(e.target)) close(); };
+    btn.onclick = () => {
+      if (!panel.classList.contains("hidden")) return close();
+      panel.classList.remove("hidden"); btn.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", outside); search.focus();
+    };
+    wrap.onkeydown = e => { if (e.key === "Escape") { close(); btn.focus(); } };
+    panel.append(tools, list);
+    wrap.append(btn, panel);
+    label();
+    return wrap;
+  }
+
   // ------------------------------------------------------------------ saved filters
   async function loadSaved() {
     try {
@@ -478,7 +547,7 @@
 
   // readable one-liner for a saved filter tree, e.g.  Age ≥ 18 AND (Gender = Male OR Gender = Other)
   const summarize = (items, mode) => items
-    .map(n => n.items ? "(" + summarize(n.items, n.mode) + ")" : `${n.column} ${OP_TEXT[n.op] || n.op} ${n.value}`)
+    .map(n => n.items ? "(" + summarize(n.items, n.mode) + ")" : `${n.column} ${OP_TEXT[n.op] || n.op} ${showValue(n)}`)
     .join(mode === "or" ? "  OR  " : "  AND  ");
 
   // rebuild a saved tree for the current file, dropping filters whose column is missing / no longer fits

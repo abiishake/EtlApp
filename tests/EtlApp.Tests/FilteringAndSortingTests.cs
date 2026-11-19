@@ -44,6 +44,25 @@ public class FilteringAndSortingTests
     public void Text_operator_on_date_column_is_rejected() =>
         Assert.Throws<ArgumentException>(() => Filtering.Apply(Data(), new[] { new FilterSpec("Visit", "contains", "2024") }));
 
+    [Theory]
+    [InlineData("Score", "[\"12\",\"5\"]", new[] { "1", "2" })]          // numbers, JSON list (what the page sends)
+    [InlineData("Score", "7, 12", new[] { "2", "3" })]                       // numbers, comma-separated
+    [InlineData("Name", "[\"ASHA\",\"Meera\"]", new[] { "1", "3" })]     // text, case-insensitive
+    [InlineData("Visit", "[\"2024-03-02\",\"2024-01-10\"]", new[] { "1", "2" })]  // dates
+    public void In_filter_matches_any_listed_value(string column, string value, string[] ids)
+    {
+        var rows = Filtering.Apply(Data(), new[] { new FilterSpec(column, "in", value) });
+        Assert.Equal(ids, rows.Select(r => (string)r["Id"]!).ToArray());
+    }
+
+    [Fact]
+    public void Empty_in_filter_is_ignored() =>
+        Assert.Equal(3, Filtering.Apply(Data(), new[] { new FilterSpec("Score", "in", "[]") }).Count);
+
+    [Fact]
+    public void In_filter_rejects_non_numbers_on_number_column() =>
+        Assert.Throws<ArgumentException>(() => Filtering.Apply(Data(), new[] { new FilterSpec("Score", "in", "5, abc") }));
+
     [Fact]
     public void Number_filters_still_work()
     {
