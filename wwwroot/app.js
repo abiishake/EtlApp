@@ -37,6 +37,67 @@
   const showValue = n => n.op === "in" ? "(" + parseList(n.value).join(", ") + ")" : n.value;
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  // ------------------------------------------------------------------ friendly pop-ups (instead of prompt / confirm / alert)
+  // ask({title, message, input?, okText?, danger?, validate?}) -> the typed text (input), true (confirm) or null / false when cancelled
+  function ask({ title, message, input = null, okText = "OK", cancelText = "Cancel", danger = false, validate = null }) {
+    const d = $("uiDialog"), inp = $("uiInput");
+    $("uiTitle").textContent = title || ""; $("uiMsg").textContent = message || "";
+    inp.classList.toggle("hidden", input == null); inp.value = input ?? "";
+    $("uiOk").textContent = okText; $("uiOk").classList.toggle("dangerfill", danger);
+    $("uiCancel").textContent = cancelText; $("uiCancel").classList.toggle("hidden", cancelText === "");
+    setStatus($("uiErr"), "");
+    return new Promise(resolve => {
+      const done = v => { d.close(); $("uiOk").onclick = $("uiCancel").onclick = d.oncancel = null; resolve(v); };
+      $("uiOk").onclick = e => {
+        e.preventDefault();
+        if (input == null) return done(true);
+        const v = inp.value.trim(), err = validate ? validate(v) : "";
+        if (err) { setStatus($("uiErr"), err, "err"); inp.focus(); return; }
+        done(v);
+      };
+      $("uiCancel").onclick = () => done(input == null ? false : null);
+      d.oncancel = e => { e.preventDefault(); done(input == null ? false : null); };
+      d.showModal();
+      if (input != null) { inp.focus(); inp.select(); } else $(danger ? "uiCancel" : "uiOk").focus();
+    });
+  }
+  const confirmBox = (title, message, okText = "OK", danger = false) => ask({ title, message, okText, danger });
+  const notice = (title, message) => ask({ title, message, okText: "OK", cancelText: "" });
+
+  // short messages in the corner that disappear by themselves
+  function toast(msg, kind = "ok") {
+    const t = el("div", "toast " + kind, msg);
+    $("toasts").append(t);
+    setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, kind === "err" ? 7000 : 3500);
+  }
+
+  // "?" tips: shown on hover / keyboard focus / tap, positioned next to the icon (works inside scrolling pop-ups too)
+  let tipFor = null;
+  function showTip(h) {
+    const tip = $("tip"); tipFor = h;
+    tip.textContent = h.dataset.hint; tip.hidden = false;
+    const r = h.getBoundingClientRect(), w = tip.offsetWidth, ht = tip.offsetHeight;
+    let x = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8), y = r.bottom + 8;
+    if (y + ht > innerHeight - 8) y = r.top - ht - 8;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { $("tip").hidden = true; tipFor = null; };
+  const hintOf = e => e.target.closest?.(".hint[data-hint]");
+  document.addEventListener("mouseover", e => { const h = hintOf(e); if (h) showTip(h); else if (tipFor && !tipFor.contains(e.target)) hideTip(); });
+  document.addEventListener("focusin", e => { const h = hintOf(e); if (h) showTip(h); else hideTip(); });
+  document.addEventListener("click", e => { const h = hintOf(e); if (h) { e.preventDefault(); e.stopPropagation(); tipFor === h && !$("tip").hidden ? hideTip() : showTip(h); } }, true);
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("tip").hidden) hideTip(); });
+  window.addEventListener("scroll", hideTip, true);
+  document.querySelectorAll(".hint[data-hint]").forEach(h => { h.tabIndex = 0; h.setAttribute("role", "button"); h.setAttribute("aria-label", "Help: " + h.dataset.hint); });
+
+  // "How it works": shown automatically the first time, and from the Help buttons
+  const openHelp = () => { closeNavIfOpen(); $("helpDialog").showModal(); $("helpClose").focus(); };
+  const closeNavIfOpen = () => { if ($("sidenav").classList.contains("open")) $("navToggle").click(); };
+  $("helpBtn").onclick = openHelp; $("navHelp").onclick = openHelp;
+  $("helpClose").onclick = () => $("helpDialog").close();
+  $("helpDialog").addEventListener("click", e => { if (e.target === $("helpDialog")) $("helpDialog").close(); });   // click outside the box
+  try { if (!localStorage.getItem("etl-help-seen")) { localStorage.setItem("etl-help-seen", "1"); setTimeout(openHelp, 300); } } catch { }
   const setStatus = (node, msg, cls) => { node.textContent = msg; node.className = "status" + (cls ? " " + cls : ""); };
   // the tree without empty filters / empty groups (what is sent to the server)
   const activeItems = items => {
@@ -86,10 +147,12 @@
   function updateSummary() {
     const box = $("summary");
     if (!sessionId) { box.classList.add("hidden"); return; }
-    const items = [["File", srcFile], ["Source sheet", srcSheet], ["Rows", fmt(totalRows)], ["Columns", fmt(columns.length)],
-      ["Clean-up", cleanupRules.length ? `${cleanupRules.length} rule(s) applied` : "None (values as uploaded)"],
-      ["Output sheets", fmt(outputSheets.length)], ["Editing", outputSheets[activeSheetIndex]?.name || ""],
-      ["Rows matching", matchCount == null ? "—" : fmt(matchCount)], ["Columns selected", fmt(chosenCols().length)]];
+    updateActions();
+    const items = [["File", srcFile],
+      ["Rows to export", matchCount == null ? "—" : `${fmt(matchCount)} of ${fmt(totalRows)}`],
+      ["Columns", `${fmt(chosenCols().length)} of ${fmt(columns.length)}`],
+      ["Sheets in export", fmt(outputSheets.length)],
+      ["Clean-up", cleanupRules.length ? `${cleanupRules.length} rule(s) applied` : "Off (values as uploaded)"]];
     box.replaceChildren(...items.filter(([, v]) => v !== "" && v != null).map(([k, v]) => {
       const d = el("div"), dl = el("dl"); const dd = el("dd", null, v); dd.title = v;
       dl.append(el("dt", null, k), dd); d.append(dl); return d;
@@ -107,7 +170,9 @@
     if (!/\.xlsx$/i.test(f.name)) return setStatus($("status"), "Only .xlsx files are supported.", "err");
     if (f.size > MAX_UPLOAD) return setStatus($("status"), `That file is ${(f.size / 1048576).toFixed(1)} MB; the limit is 20 MB.`, "err");
     if (sessionId && (outputSheets.length > 1 || activeFilters().length > 0) &&
-        !confirm("Uploading a new file resets your current sheets and filters. Continue?")) return;
+        !await confirmBox("Upload a new file?", `Uploading “${f.name}” starts over: your current sheets and filters are cleared. Tip: save them as a setup first (Sheets & setups) to reuse them.`, "Upload and start over")) {
+      $("file").value = ""; showFileInfo(); return;
+    }
 
     closePreviewPanel(false);
     $("savedContent").hidden = true; $("savedToggle").setAttribute("aria-expanded", "false");
@@ -147,9 +212,12 @@
       matchCount = totalRows = data.rowCount;
       filterError = "";
 
-      setStatus($("status"),
-        `Done: ${fmt(data.rowCount)} rows, ${columns.length} columns (sheet “${data.sheet}”).`, "ok");
+      setStatus($("status"), "");
+      $("loadedName").textContent = f.name;
+      $("loadedMeta").textContent = `${fmt(data.rowCount)} rows and ${columns.length} columns read from sheet “${data.sheet}”. Now adjust the output below.`;
+      $("uploadCard").classList.add("isloaded"); $("fileInfo").textContent = "";
       setPill("ready", "Workbook loaded");
+      toast(`Loaded ${f.name}: ${fmt(data.rowCount)} rows`);
 
       showNotes(data);
 
@@ -160,10 +228,13 @@
       loadSaved();
       $("previewCard").classList.remove("hidden");
       pvKey = ""; pvPendingKey = ""; pvResult = null; ++pvNo; ++reqNo; countPending = false; schedulePreview(); updateStepper();
+      $("previewCard").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     } catch (e) {
       setStatus($("status"), e.message + " Check the file and try again.", "err"); setPill("failed", "Upload failed");
+      if (!sessionId) $("uploadCard").classList.remove("isloaded");
     } finally {
       $("uploadBtn").disabled = false;
+      $("file").value = "";          // choosing the same file again uploads it again
     }
   };
 
@@ -200,7 +271,8 @@
   }
   function updateBadges() {
     const name = outputSheets[activeSheetIndex]?.name;
-    document.querySelectorAll(".editing-badge").forEach(b => { b.textContent = name ? `Editing sheet: ${name}` : ""; b.classList.toggle("hidden", !name); });
+    document.querySelectorAll(".editing-badge").forEach(b => { b.textContent = name && outputSheets.length > 1 ? `Editing sheet: ${name}` : ""; });
+    updatePanelSheet();
   }
   function renderSheetTabs() {
     updateBadges();
@@ -227,20 +299,19 @@
     }
     $("removeSheetBtn").disabled = outputSheets.length < 2;
   }
-  function renameActiveSheet() {
+  async function renameActiveSheet() {
     const i = activeSheetIndex, sh = outputSheets[i]; if (!sh) return;
-    const n = prompt("Output sheet name (max 31 characters):", sh.name);
-    if (n == null) return;
-    const cleaned = n.trim();
-    if (!cleaned || cleaned.length > 31 || /[\\/?*\[\]:]/.test(cleaned)) return alert("Enter a valid Excel sheet name (1–31 characters; no \\ / ? * [ ] : characters).");
-    if (outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === cleaned.toLowerCase())) return alert("Sheet names must be unique.");
+    const cleaned = await ask({ title: "Rename sheet", message: "Name of this tab in the exported Excel file (up to 31 characters):", input: sh.name, okText: "Rename",
+      validate: v => !v || v.length > 31 || /[\\/?*\[\]:]/.test(v) ? "Use 1–31 characters, without \\ / ? * [ ] :"
+        : outputSheets.some((other, j) => j !== i && other.name.toLowerCase() === v.toLowerCase()) ? "Another sheet already has this name." : "" });
+    if (cleaned == null) return;
     sh.name = cleaned; renderSheetTabs(); schedulePreview();
   }
   $("renameSheetBtn").onclick = renameActiveSheet;
-  $("removeSheetBtn").onclick = () => {
+  $("removeSheetBtn").onclick = async () => {
     if (outputSheets.length < 2) return;
     const i = activeSheetIndex;
-    if (!confirm(`Remove sheet “${outputSheets[i].name}”?`)) return;
+    if (!await confirmBox("Remove sheet?", `Remove the sheet “${outputSheets[i].name}” and its filters and columns from the export?`, "Remove sheet", true)) return;
     outputSheets.splice(i, 1);
     activeSheetIndex = -1; restoreSheet(Math.min(i, outputSheets.length - 1));
   };
@@ -250,6 +321,7 @@
     while (outputSheets.some(sh => sh.name.toLowerCase() === n.toLowerCase())) n = `Sheet ${outputSheets.length + 1} (${suffix++})`;
     outputSheets.push({ name: n, state: null });
     restoreSheet(outputSheets.length - 1);
+    toast(`Added “${n}”. Filters, columns and sort now apply to this sheet.`);
   }
   // Saved setups live on the server (SQLite), so every device sees them. Older versions kept them in this browser:
   // those are moved to the server once (WORKFLOW_KEY), then removed from the browser.
@@ -320,17 +392,18 @@
     setStatus($("workflowStatus"), gone.length
       ? `Loaded “${name}”, but skipped filters on columns that are missing or no longer fit in this file: ${gone.join(", ")}.`
       : `Loaded saved setup “${name}”. Filters and columns have been restored.`, gone.length ? "err" : "ok");
+    if (!gone.length) toast(`Loaded setup “${name}”`);
   };
   $("saveWorkflowBtn").onclick = async () => {
     const name = await saveCurrentWorkflow();
     if (!name) return;
-    setStatus($("workflowStatus"), `Saved the current sheets as “${name}”.`, "ok");
+    setStatus($("workflowStatus"), `Saved the current sheets as “${name}”.`, "ok"); toast(`Setup “${name}” saved`);
   };
   $("deleteWorkflowBtn").onclick = async () => {
     const name = $("workflowList").value;
     if (!name) return setStatus($("workflowStatus"), "Choose a saved setup to delete.", "err");
     const w = workflows.find(x => x.name === name); if (!w) return;
-    if (!confirm(`Delete the saved setup "${name}"?`)) return;
+    if (!await confirmBox("Delete setup?", `Delete the saved setup “${name}”? This cannot be undone.`, "Delete", true)) return;
     try {
       const r = await fetch("/api/workflows/" + w.id, { method: "DELETE" });
       if (!r.ok && r.status !== 404) throw new Error();
@@ -373,6 +446,8 @@
     const n = root.items.length;
     $("noFilters").classList.toggle("hidden", n > 0);
     $("addGroup").classList.toggle("hidden", n === 0);      // groups only once there is something to group
+    $("groupHint").classList.toggle("hidden", n === 0);
+    $("addFilter").textContent = n ? "+ Add another condition" : "+ Add condition";
     if (n > 1) {
       const head = el("div", "ghead");
       head.append(el("span", "opt", "Keep rows that"));
@@ -594,7 +669,7 @@
       const del = el("button", "x danger", "✕");
       del.title = "Delete saved filters"; del.setAttribute("aria-label", `Delete saved filter ${sf.name}`);
       del.onclick = async () => {
-        if (!confirm(`Delete the saved filter "${sf.name}"?`)) return;
+        if (!await confirmBox("Delete saved filters?", `Delete the saved filters “${sf.name}”? This cannot be undone.`, "Delete", true)) return;
         try {
           const r = await fetch("/api/saved-filters/" + sf.id, { method: "DELETE" });
           if (!r.ok && r.status !== 404) throw new Error();
@@ -644,6 +719,7 @@
     setStatus($("savedMsg"),
       warn.length ? `Applied, but ${warn.join("; ")}` : `Applied the saved filter "${sf.name}".`,
       warn.length ? "err" : "ok");
+    if (!warn.length) toast(`Applied saved filters “${sf.name}”`);
   }
 
   // live "N of M rows match" (debounced; ignores out-of-date answers)
@@ -895,23 +971,33 @@
 
   // One live set of controls: park in the hidden Preview store when closed.
   const panelSources = { filter: ["filterControls"], sort: ["sortControls"], columns: ["columnControls", "orderControls"], sheets: ["sheetControls"], more: ["notes"] };
-  const panelTitles = { filter: "Filter data", sort: "Sort rows", columns: "Columns, names & order", sheets: "Sheets & saved setups", more: "Review & workbook actions" };
+  const panelTitles = { filter: "Filter rows", sort: "Sort rows", columns: "Choose columns", sheets: "Sheets & saved setups", more: "More" };
+  const panelHelp = {
+    filter: "Keep only the rows you need. Rows that do not match the conditions are left out of the export. The row count at the bottom updates as you type.",
+    columns: "Tick the columns to include in the export. Turn on “Rename columns” to give them new headers, and drag them in “Column order” to rearrange.",
+    sort: "Choose the order of the rows in the exported sheet.",
+    sheets: "Add more tabs to the Excel file, and save everything as a setup to repeat the same export next time.",
+    more: "Notes about this upload and other actions."
+  };
   let previewPanel = null, movedControls = [], panelTrigger = null;
   function closePreviewPanel(focus = true) {
     movedControls.forEach(({ node, home }) => {
       if (home) home.replaceWith(node); else $("pvControlStore").append(node);
     }); movedControls = [];
+    const wasOpen = !$("pvPanel").hidden;
     $("pvPanelBody").replaceChildren(); $("pvPanel").hidden = true; previewPanel = null;
+    document.body.classList.remove("modal-open");
     document.querySelectorAll("[data-pv-panel]").forEach(b => { b.setAttribute("aria-expanded", "false"); b.classList.remove("active"); });
     updateStepper();
-    if (focus) panelTrigger?.focus();
+    if (focus && wasOpen) panelTrigger?.focus();
   }
-  function openPreviewPanel(name) {
+  function openPreviewPanel(name, trigger) {
     closePreviewPanel(false); previewPanel = name;
-    panelTrigger = document.querySelector(`[data-pv-panel="${name}"]`);
-    panelTrigger?.setAttribute("aria-expanded", "true"); panelTrigger?.classList.add("active");
-    $("pvPanelTitle").textContent = panelTitles[name]; $("pvPanel").hidden = false;
-    flash($("pvPanel")); updateStepper();
+    panelTrigger = trigger || document.querySelector(`.act[data-pv-panel="${name}"]`);
+    document.querySelectorAll(`[data-pv-panel="${name}"]`).forEach(b => { b.setAttribute("aria-expanded", "true"); b.classList.add("active"); });
+    $("pvPanelTitle").textContent = panelTitles[name]; $("pvPanelHelp").textContent = panelHelp[name] || "";
+    updatePanelSheet();
+    $("pvPanel").hidden = false; document.body.classList.add("modal-open"); updateStepper();
     for (const id of panelSources[name] || []) {
       const node = $(id);
       // Transformation notes keep their Upload home; configuration stays in Preview only.
@@ -920,29 +1006,67 @@
       $("pvPanelBody").append(node); movedControls.push({ node, home });
     }
     if (name === "more") {
-      const upload = el("button", null, "Upload another workbook"); upload.onclick = () => { closePreviewPanel(false); $("uploadCard").scrollIntoView({ block: "start" }); $("file").focus(); };
+      const upload = el("button", null, "Upload another workbook"); upload.onclick = () => { closePreviewPanel(false); $("file").click(); };
       $("pvPanelBody").append(upload);
       if ($("notes").classList.contains("hidden")) $("pvPanelBody").append(el("p", "empty", "No transformation changes reported for this upload."));
+      else $("notes").open = true;
     }
+    if (name === "filter" && !root.items.length) $("addFilter").focus();
+    else ($("pvPanelBody").querySelector("input:not([type=hidden]):not(:disabled), select, button:not(:disabled)") || $("pvDone")).focus({ preventScroll: true });
+    $("pvPanelBody").scrollTop = 0;
   }
-  // left navigation: open the chosen panel (or go back to it when it is already open) and bring it into view
+  // which sheet the pop-up is changing (only worth saying when the export has several)
+  function updatePanelSheet() {
+    const name = outputSheets[activeSheetIndex]?.name;
+    const t = $("pvPanelTitle"); t.querySelector(".badge")?.remove();
+    if (previewPanel && previewPanel !== "sheets" && previewPanel !== "more" && outputSheets.length > 1 && name) t.append(el("span", "badge", "Sheet: " + name));
+  }
+  // left navigation and the toolbar above the preview open the same pop-up
   document.querySelectorAll("[data-pv-panel]").forEach(b => b.onclick = () => {
-    if (previewPanel !== b.dataset.pvPanel) openPreviewPanel(b.dataset.pvPanel);
-    closeNav(); flash($("pvPanel"));
-    $("pvPanel").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    closeNav();
+    if (previewPanel !== b.dataset.pvPanel) openPreviewPanel(b.dataset.pvPanel, b.closest("#sidenav") ? $("previewCard").querySelector(`.act[data-pv-panel="${b.dataset.pvPanel}"]`) : b);
   });
   $("pvClosePanel").onclick = () => closePreviewPanel();
-  $("pvPanel").addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); closePreviewPanel(); } });
+  $("pvDone").onclick = () => closePreviewPanel();
+  $("pvPanel").addEventListener("mousedown", e => { if (e.target === $("pvPanel")) closePreviewPanel(); });   // click on the dimmed background
+  $("pvPanel").addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      if (e.target.closest(".msel")) return;      // the value picker closes itself first
+      e.preventDefault(); closePreviewPanel(); return;
+    }
+    if (e.key !== "Tab") return;                  // keep keyboard focus inside the pop-up
+    const f = [...$("pvPanel").querySelectorAll("button, input, select, textarea, [tabindex='0'], summary, a[href]")].filter(x => !x.disabled && x.offsetParent !== null);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  });
   $("savedToggle").onclick = () => { const expanded = $("savedToggle").getAttribute("aria-expanded") !== "true"; $("savedToggle").setAttribute("aria-expanded", String(expanded)); $("savedContent").hidden = !expanded; };
-  $("pvEditFilters").onclick = () => openPreviewPanel("filter");
-  $("pvClearFilters").onclick = () => $("clearFilters").click();
+  $("pvClearFilters").onclick = () => { $("clearFilters").click(); toast("Filters cleared: all rows will be exported"); };
+  $("actCleanupBtn").onclick = () => $("openCleanup").click();
+  const plural = (n, one, many = one + "s") => `${fmt(n)} ${n === 1 ? one : many}`;
+  const countConditions = items => items.reduce((s, n) => s + (n.items ? countConditions(n.items) : 1), 0);
   function updatePreviewWorkspace(pending) {
-    const af = activeFilters(), summary = af.length ? summarize(af, root.mode) : "No filters applied";
+    const af = activeFilters(), summary = af.length ? summarize(af, root.mode) : "";
     $("pvFilterSummary").textContent = summary; $("pvFilterSummary").title = summary;
-    $("pvEditFilters").textContent = af.length ? "Edit filters" : "Add filter"; $("pvClearFilters").disabled = !root.items.length;
+    $("pvFilterBar").classList.toggle("hidden", !af.length);
     const matching = countPending ? "Recalculating…" : filterError ? "Unavailable" : matchCount == null ? "—" : fmt(matchCount);
     const shown = pending ? "Updating…" : pvResult ? `${Math.min(pvResult.rows.length, PREVIEW_ROWS)} of ${fmt(pvResult.total)}` : "Loading…";
-    $("pvCounts").replaceChildren(el("span", null, `Total rows: ${fmt(totalRows)}`), el("span", null, `Matching rows: ${matching}`), el("span", null, `Showing: ${shown}`));
+    $("pvCounts").replaceChildren(el("span", null, `Total rows: ${fmt(totalRows)}`), el("span", null, `Rows to export: ${matching}`), el("span", null, `Preview shows: ${shown}`));
+  }
+  // the toolbar buttons say what is set, so nobody has to open a pop-up to find out
+  function updateActions() {
+    if (!sessionId) return;
+    const af = activeFilters(), n = countConditions(af);
+    const rows = countPending ? "counting…" : matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows`;
+    const set = (id, text, on) => { $(id).textContent = text; $(id).closest(".act").classList.toggle("on", !!on); };
+    set("actFilter", af.length ? `${plural(n, "condition")} · ${rows}` : `All ${fmt(totalRows)} rows kept`, af.length);
+    const nc = chosenCols().length, rn = $("renameToggle").checked ? Object.keys(renames).filter(c => selected.has(c)).length : 0;
+    set("actColumns", `${nc} of ${columns.length} selected` + (rn ? ` · ${rn} renamed` : ""), nc !== columns.length || rn);
+    set("actSort", sorts.length ? `By ${sorts[0].column}` + (sorts.length > 1 ? ` +${sorts.length - 1}` : "") : "Original order", sorts.length);
+    set("actSheets", plural(outputSheets.length, "sheet") + (outputSheets.length > 1 ? ` · editing ${outputSheets[activeSheetIndex]?.name || ""}` : ""), outputSheets.length > 1);
+    set("actCleanup", cleanupRules.length ? `${plural(cleanupRules.length, "rule")} applied` : "None applied (optional)", cleanupRules.length);
+    const exp = countPending ? "Counting rows…" : filterError ? "Fix the filter error to see the row count" : matchCount == null ? "" : `${fmt(matchCount)} of ${fmt(totalRows)} rows · ${plural(nc, "column")} will be exported`;
+    $("pvPanelCount").textContent = exp;
   }
 
   // ------------------------------------------------------------------ left navigation (a drawer on narrow screens)
@@ -1011,6 +1135,7 @@
     $("saveFiltersBtn").title = hasFilters ? "Save these filters (with this sheet's columns, renames and sorts) now" : "Add a filter first";
     $("saveFiltersLbl").title = hasFilters ? "Save the filters again under this name every time the workbook is exported" : "Add a filter first";
     $("dl").classList.toggle("hidden", selected.size === 0);   // export bar appears once something is selected
+    document.documentElement.style.setProperty("--dl-h", ($("dl").classList.contains("hidden") ? 0 : $("dl").offsetHeight) + "px");   // toasts sit above it
     const af = activeFilters();
     $("filterSummary").replaceChildren(...(af.length ? [el("b", null, "Keeping rows where: "), document.createTextNode(summarize(af, root.mode))] : []));
     updateSummary();
@@ -1031,7 +1156,7 @@
     if (!af.length) return setStatus(msg, "Add a filter condition first.", "err");
     if (!name) { setStatus(msg, "Enter a name for these filters.", "err"); $("saveName").focus(); return; }
     const existing = savedFilters.find(sf => sf.name.toLowerCase() === name.toLowerCase());
-    if (existing && !confirm(`A saved filter named "${existing.name}" already exists. Replace it?`)) return;
+    if (existing && !await confirmBox("Replace saved filters?", `Saved filters named “${existing.name}” already exist. Replace them with these?`, "Replace")) return;
     captureSheet();
     const sheet = { sheetName: outputSheets[activeSheetIndex]?.name || "", columns: chosenCols(), columnOrder: [...order], sorts: normSorts(sorts),
       filters: af, mode: root.mode, renames: $("renameToggle").checked ? renames : {} };
@@ -1041,7 +1166,7 @@
       try { res = await fetch("/api/saved-filters", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: sessionId, name, sheet }) }); }
       catch { throw new Error("Could not reach the server. Check the connection and try again."); }
       if (!res.ok) { const d = await readJson(res); throw new Error(d.error || `Could not save the filters (HTTP ${res.status}).`); }
-      setStatus(msg, `Saved filters “${name}”.`, "ok");
+      setStatus(msg, `Saved filters “${name}”.`, "ok"); toast(`Filters “${name}” saved`);
       loadSaved();
     } catch (e) { setStatus(msg, e.message, "err"); }
     finally { $("saveFiltersBtn").disabled = activeFilters().length === 0; }
@@ -1077,7 +1202,7 @@
       const missingFilterName = sheets.find(sh => sh.saveFilters && !sh.filterName);
       if (missingFilterName) {
         restoreSheet(outputSheets.findIndex(sh => sh.name === missingFilterName.sheetName));
-        setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or uncheck Also update on export.`, "err");
+        setStatus($("dlStatus"), `Enter a filter name for sheet “${missingFilterName.sheetName}” or untick “Also update on every export”.`, "err");
         openPreviewPanel("filter"); $("saveName").focus(); setPill("failed", "Export needs a filter name");
         return;
       }
@@ -1104,8 +1229,9 @@
         : workflowName ? `Downloaded. Setup “${workflowName}” saved with each sheet’s filters and columns.` : "Downloaded.",
         warnings.length ? "err" : "ok");
       setPill(warnings.length ? "warn" : "done", warnings.length ? "Exported with warnings" : "Exported");
+      toast(warnings.length ? "Downloaded, with warnings: see the bottom bar" : `Downloaded ${a.download}. Check your Downloads folder.`, warnings.length ? "warn" : "ok");
     } catch (e) {
-      setStatus($("dlStatus"), e.message, "err"); setPill("failed", "Export failed");
+      setStatus($("dlStatus"), e.message, "err"); setPill("failed", "Export failed"); toast("Export failed: " + e.message, "err");
     } finally {
       $("downloadBtn").disabled = countPending || matchCount == null || matchCount === 0;
     }
@@ -1159,7 +1285,8 @@
     const f = $("file").files[0];
     $("fileInfo").textContent = f ? `${f.name} · ${(f.size / 1048576).toFixed(1)} MB` : "";
   };
-  $("file").onchange = showFileInfo;
+  // choosing a file uploads it straight away (no separate Upload click)
+  $("file").onchange = () => { showFileInfo(); if ($("file").files[0] && !$("uploadBtn").disabled) $("uploadBtn").click(); };
   $("savedSearch").oninput = renderSaved;
   // keep the setupName box synced on programmatic fileName changes too (load setup / saved filters already call syncSetupName)
 
